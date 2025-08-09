@@ -194,6 +194,54 @@ async function getCurrentPositionPromise(){
   });
 }
 
+/* ====== Utilities ====== */
+function deg2rad(d){ return d * Math.PI/180; }
+function haversine(lat1, lon1, lat2, lon2) {
+  const R=6371000;
+  const dLat = deg2rad(lat2-lat1);
+  const dLon = deg2rad(lon2-lon1);
+  const a = Math.sin(dLat/2)*Math.sin(dLat/2) + Math.cos(deg2rad(lat1))*Math.cos(deg2rad(lat2))*Math.sin(dLon/2)*Math.sin(dLon/2);
+  const c = 2*Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R*c;
+}
+function normalizeModifier(m){
+  m = (m||'straight').toLowerCase();
+  if (m.includes('left')) return 'left';
+  if (m.includes('right')) return 'right';
+  if (m.includes('u')) return 'uturn';
+  if (m.includes('straight') || m.includes('continue')) return 'straight';
+  if (m.includes('roundabout')) return 'roundabout';
+  return m;
+}
+
+/* ====== Tìm maneuver tiếp theo và khoảng cách còn lại ====== */
+function findNextManeuverIndex(currentIndex, maneuvers, routeCoords) {
+  for (let i = 0; i < maneuvers.length; i++) {
+    // Tìm điểm trên routeCoords gần nhất với maneuver[i]
+    let minDist = Infinity;
+    let closestIdx = -1;
+    for (let j = currentIndex; j < routeCoords.length; j++) {
+      const d = haversine(routeCoords[j][0], routeCoords[j][1], maneuvers[i].lat, maneuvers[i].lon);
+      if (d < minDist) {
+        minDist = d;
+        closestIdx = j;
+      }
+    }
+    if (closestIdx > currentIndex) {
+      return {manIdx: i, coordIdx: closestIdx};
+    }
+  }
+  return null; // Không còn maneuver nào phía sau
+}
+
+function distanceAlongRoute(startIdx, endIdx, routeCoords) {
+  let dist = 0;
+  for (let i = startIdx; i < endIdx; i++) {
+    dist += haversine(routeCoords[i][0], routeCoords[i][1], routeCoords[i+1][0], routeCoords[i+1][1]);
+  }
+  return dist;
+}
+
 /* ====== Button route behavior ====== */
 let simulatedInterval = null;
 let routeCoordinates = []; // array of [lat,lng]
@@ -247,13 +295,13 @@ btnRoute.addEventListener('click', async () => {
   }
 });
 
-/* ====== Simulation: move along routeCoordinates, send formatted distance + direction to ESP32 ====== */
+/* ====== Simulation ====== */
 btnSimStart.addEventListener('click', () => {
   if (!routeCoordinates || routeCoordinates.length < 2) { alert('Chưa có route'); return; }
   if (!writeChar) log('Chú ý: chưa kết nối BLE, chỉ mô phỏng map (không gửi).');
   if (simulatedInterval) { clearInterval(simulatedInterval); simulatedInterval = null; }
 
-  // Chuẩn bị danh sách maneuvers với tọa độ và hướng
+  // Chuẩn bị maneuvers dữ liệu dùng trong simulate
   const maneuvers = osrmSteps.map(s => {
     return {
       lat: s.maneuver.location[1],
@@ -275,85 +323,51 @@ btnSimStart.addEventListener('click', () => {
     userMarker.setLatLng(pos);
     map.panTo(pos);
 
-    // Tìm điểm quẹo phía trước gần nhất (khoảng cách > 5m và nhỏ nhất)
-    let nextMan = null;
-    let minDist = Infinity;
-    for (let i = 0; i < maneuvers.length; i++) {
-      const distToMan = haversine(pos[0], pos[1], maneuvers[i].lat, maneuvers[i].lon);
-      if (distToMan > 5 && distToMan < minDist) {
-        minDist = distToMan;
-        nextMan = maneuvers[i];
+    const nextManData = findNextManeuverIndex(currentSimIndex, maneuvers, routeCoordinates);
+
+    let message = '';
+    if (!nextManData) {
+      message = 'Đã đến nơi';
+    } else {
+      const distToNextMan = distanceAlongRoute(currentSimIndex, nextManData.coordIdx, routeCoordinates);
+      const dir = normalizeModifier(maneuvers[nextManData.manIdx].modifier || 'straight');
+
+      const distText = distToNextMan >= 1000 ? (distToNextMan/1000).toFixed(1).replace('.0','') + 'km' : Math.round(distToNextMan) + 'm';
+
+      function directionToText(dir){
+        switch(dir) {
+          case 'left': return 'quẹo trái';
+          case 'right': return 'quẹo phải';
+          case 'uturn': return 'quay đầu';
+          case 'straight': return 'đi thẳng';
+          case 'arrived': return 'đã đến nơi';
+          case 'roundabout': return 'vào vòng xuyến';
+          case 'sharp left': return 'quẹo trái gắt';
+          case 'slight left': return 'rẽ nhẹ trái';
+          case 'sharp right': return 'quẹo phải gắt';
+          case 'slight right': return 'rẽ nhẹ phải';
+          default: return dir;
+        }
       }
+
+      const dirText = directionToText(dir);
+      message = `Còn ${distText} nữa ${dirText}`;
     }
-
-    // Nếu không tìm được điểm quẹo phía trước (ví dụ gần đến cuối), lấy điểm cuối cùng làm điểm đến
-    if (!nextMan && routeCoordinates.length) {
-      const last = routeCoordinates[routeCoordinates.length - 1];
-      nextMan = { lat: last[0], lon: last[1], modifier: 'arrived' };
-      minDist = haversine(pos[0], pos[1], nextMan.lat, nextMan.lon);
-    }
-
-    const d = minDist; // khoảng cách đến điểm quẹo gần nhất phía trước
-    const dir = normalizeModifier(nextMan.modifier || 'straight');
-
-    function formatDistance(d){
-      if (d >= 1000) {
-        return (d/1000).toFixed(1).replace('.0','') + 'km';
-      } else {
-        return Math.round(d) + 'm';
-      }
-    }
-
-    function directionToText(dir){
-      switch(dir) {
-        case 'left': return 'quẹo trái';
-        case 'right': return 'quẹo phải';
-        case 'uturn': return 'quay đầu';
-        case 'straight': return 'đi thẳng';
-        case 'arrived': return 'đã đến nơi';
-        case 'roundabout': return 'vào vòng xuyến';
-        case 'sharp left': return 'quẹo trái gắt';
-        case 'slight left': return 'rẽ nhẹ trái';
-        case 'sharp right': return 'quẹo phải gắt';
-        case 'slight right': return 'rẽ nhẹ phải';
-        default: return dir;
-      }
-    }
-
-    const distText = formatDistance(d);
-    const dirText = directionToText(dir);
-    const message = dir === 'arrived' ? 'Đã đến nơi' : `Còn ${distText} nữa ${dirText}`;
 
     if (writeChar) await sendToESP(message);
     log('Sim pos idx', currentSimIndex, '-> gửi:', message);
 
-    currentSimIndex += 1;
+    currentSimIndex++;
   }, 1000);
 });
 
 btnSimStop.addEventListener('click', () => {
-  if (simulatedInterval) { clearInterval(simulatedInterval); simulatedInterval = null; log('Simulation stopped'); }
+  if (simulatedInterval) {
+    clearInterval(simulatedInterval);
+    simulatedInterval = null;
+    log('Simulation stopped');
+  }
 });
-
-/* ====== Utilities ====== */
-function deg2rad(d){ return d * Math.PI/180; }
-function haversine(lat1, lon1, lat2, lon2) {
-  const R=6371000;
-  const dLat = deg2rad(lat2-lat1);
-  const dLon = deg2rad(lon2-lon1);
-  const a = Math.sin(dLat/2)*Math.sin(dLat/2) + Math.cos(deg2rad(lat1))*Math.cos(deg2rad(lat2))*Math.sin(dLon/2)*Math.sin(dLon/2);
-  const c = 2*Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-  return R*c;
-}
-function normalizeModifier(m){
-  m = (m||'straight').toLowerCase();
-  if (m.includes('left')) return 'left';
-  if (m.includes('right')) return 'right';
-  if (m.includes('u')) return 'uturn';
-  if (m.includes('straight') || m.includes('continue')) return 'straight';
-  if (m.includes('roundabout')) return 'roundabout';
-  return m;
-}
 
 log('Trang sẵn sàng. Lưu ý: bấm "Quét BLE" để chọn thiết bị, chọn thiết bị trong list và bấm Connect trước khi gửi.');
 </script>
