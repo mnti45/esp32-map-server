@@ -99,7 +99,6 @@ btnScan.addEventListener('click', async () => {
       deviceList.value = device.id;
     } else {
       log('Thiết bị đã tồn tại trong danh sách:', device.name || device.id);
-      deviceList.value = device.id;
     }
   } catch (err) {
     log('Lỗi khi quét:', err);
@@ -254,7 +253,7 @@ btnSimStart.addEventListener('click', () => {
   if (!writeChar) log('Chú ý: chưa kết nối BLE, chỉ mô phỏng map (không gửi).');
   if (simulatedInterval) { clearInterval(simulatedInterval); simulatedInterval = null; }
 
-  // chuẩn bị danh sách điểm quẹo, filter chỉ các bước có modifier để hướng dẫn chính xác
+  // Chuẩn bị danh sách maneuvers với tọa độ và hướng
   const maneuvers = osrmSteps.map(s => {
     return {
       lat: s.maneuver.location[1],
@@ -265,80 +264,75 @@ btnSimStart.addEventListener('click', () => {
   });
 
   simulatedInterval = setInterval(async () => {
-  if (currentSimIndex >= routeCoordinates.length) {
-    clearInterval(simulatedInterval);
-    log('Simulation finished: reached end');
-    if (writeChar) await sendToESP('Đã đến nơi');
-    return;
-  }
-
-  const pos = routeCoordinates[currentSimIndex];
-  userMarker.setLatLng(pos);
-  map.panTo(pos);
-
-  // Tìm điểm quẹo phía trước gần nhất (khoảng cách > 5m) có khoảng cách nhỏ nhất
-  let nextMan = null;
-  let minDist = Infinity;
-  for (let i = 0; i < maneuvers.length; i++) {
-    const distToMan = haversine(pos[0], pos[1], maneuvers[i].lat, maneuvers[i].lon);
-    if (distToMan > 5 && distToMan < minDist) {
-      minDist = distToMan;
-      nextMan = maneuvers[i];
+    if (currentSimIndex >= routeCoordinates.length) {
+      clearInterval(simulatedInterval);
+      log('Simulation finished: reached end');
+      if (writeChar) await sendToESP('Đã đến nơi');
+      return;
     }
-  }
 
-  // Nếu không tìm được điểm quẹo phía trước (ví dụ gần đến cuối), lấy điểm cuối cùng làm điểm đến
-  if (!nextMan && routeCoordinates.length) {
-    const last = routeCoordinates[routeCoordinates.length - 1];
-    nextMan = { lat: last[0], lon: last[1], modifier: 'arrived' };
-    minDist = haversine(pos[0], pos[1], nextMan.lat, nextMan.lon);
-  }
+    const pos = routeCoordinates[currentSimIndex];
+    userMarker.setLatLng(pos);
+    map.panTo(pos);
 
-  const d = minDist; // khoảng cách đến điểm quẹo gần nhất phía trước
-  const dir = normalizeModifier(nextMan.modifier || 'straight');
-
-  function formatDistance(d){
-    if (d >= 1000) {
-      return (d/1000).toFixed(1).replace('.0','') + 'km';
-    } else {
-      return Math.round(d) + 'm';
+    // Tìm điểm quẹo phía trước gần nhất (khoảng cách > 5m và nhỏ nhất)
+    let nextMan = null;
+    let minDist = Infinity;
+    for (let i = 0; i < maneuvers.length; i++) {
+      const distToMan = haversine(pos[0], pos[1], maneuvers[i].lat, maneuvers[i].lon);
+      if (distToMan > 5 && distToMan < minDist) {
+        minDist = distToMan;
+        nextMan = maneuvers[i];
+      }
     }
-  }
 
-  function directionToText(dir){
-    switch(dir) {
-      case 'left': return 'quẹo trái';
-      case 'right': return 'quẹo phải';
-      case 'uturn': return 'quay đầu';
-      case 'straight': return 'đi thẳng';
-      case 'arrived': return 'đã đến nơi';
-      case 'roundabout': return 'vào vòng xuyến';
-      case 'sharp left': return 'quẹo trái gắt';
-      case 'slight left': return 'rẽ nhẹ trái';
-      case 'sharp right': return 'quẹo phải gắt';
-      case 'slight right': return 'rẽ nhẹ phải';
-      default: return dir;
+    // Nếu không tìm được điểm quẹo phía trước (ví dụ gần đến cuối), lấy điểm cuối cùng làm điểm đến
+    if (!nextMan && routeCoordinates.length) {
+      const last = routeCoordinates[routeCoordinates.length - 1];
+      nextMan = { lat: last[0], lon: last[1], modifier: 'arrived' };
+      minDist = haversine(pos[0], pos[1], nextMan.lat, nextMan.lon);
     }
-  }
 
-  const distText = formatDistance(d);
-  const dirText = directionToText(dir);
-  const message = dir === 'arrived' ? 'Đã đến nơi' : `Còn ${distText} nữa ${dirText}`;
+    const d = minDist; // khoảng cách đến điểm quẹo gần nhất phía trước
+    const dir = normalizeModifier(nextMan.modifier || 'straight');
 
-  if (writeChar) await sendToESP(message);
-  log('Sim pos idx', currentSimIndex, '-> gửi:', message);
+    function formatDistance(d){
+      if (d >= 1000) {
+        return (d/1000).toFixed(1).replace('.0','') + 'km';
+      } else {
+        return Math.round(d) + 'm';
+      }
+    }
 
-  currentSimIndex += 1;
-}, 1000);
+    function directionToText(dir){
+      switch(dir) {
+        case 'left': return 'quẹo trái';
+        case 'right': return 'quẹo phải';
+        case 'uturn': return 'quay đầu';
+        case 'straight': return 'đi thẳng';
+        case 'arrived': return 'đã đến nơi';
+        case 'roundabout': return 'vào vòng xuyến';
+        case 'sharp left': return 'quẹo trái gắt';
+        case 'slight left': return 'rẽ nhẹ trái';
+        case 'sharp right': return 'quẹo phải gắt';
+        case 'slight right': return 'rẽ nhẹ phải';
+        default: return dir;
+      }
+    }
 
+    const distText = formatDistance(d);
+    const dirText = directionToText(dir);
+    const message = dir === 'arrived' ? 'Đã đến nơi' : `Còn ${distText} nữa ${dirText}`;
 
-/* ====== Stop simulation ====== */
+    if (writeChar) await sendToESP(message);
+    log('Sim pos idx', currentSimIndex, '-> gửi:', message);
+
+    currentSimIndex += 1;
+  }, 1000);
+});
+
 btnSimStop.addEventListener('click', () => {
-  if (simulatedInterval) {
-    clearInterval(simulatedInterval);
-    simulatedInterval = null;
-    log('Simulation stopped');
-  }
+  if (simulatedInterval) { clearInterval(simulatedInterval); simulatedInterval = null; log('Simulation stopped'); }
 });
 
 /* ====== Utilities ====== */
@@ -347,9 +341,7 @@ function haversine(lat1, lon1, lat2, lon2) {
   const R=6371000;
   const dLat = deg2rad(lat2-lat1);
   const dLon = deg2rad(lon2-lon1);
-  const a = Math.sin(dLat/2)*Math.sin(dLat/2) +
-            Math.cos(deg2rad(lat1))*Math.cos(deg2rad(lat2)) *
-            Math.sin(dLon/2)*Math.sin(dLon/2);
+  const a = Math.sin(dLat/2)*Math.sin(dLat/2) + Math.cos(deg2rad(lat1))*Math.cos(deg2rad(lat2))*Math.sin(dLon/2)*Math.sin(dLon/2);
   const c = 2*Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
   return R*c;
 }
@@ -367,5 +359,3 @@ log('Trang sẵn sàng. Lưu ý: bấm "Quét BLE" để chọn thiết bị, ch
 </script>
 </body>
 </html>
-
-
