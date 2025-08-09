@@ -1,132 +1,153 @@
 <!DOCTYPE html>
-<html>
+<html lang="vi">
 <head>
-<meta charset="utf-8"/>
-<title>BLE + OSM Navigation</title>
-<style>
-  #map { height: 400px; width: 100%; }
-  body { font-family: Arial; }
-</style>
+<meta charset="utf-8">
+<title>Map + BLE</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
-<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-<script src="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.js"></script>
+<style>
+  body { font-family: Arial; margin: 0; padding: 0; }
+  #map { height: 50vh; }
+  #panel { padding: 10px; }
+  button { padding: 8px 12px; margin: 4px; }
+  #devices { margin-top: 6px; }
+  #log { font-size: 14px; background: #f7f7f7; padding: 8px; height: 180px; overflow-y: auto; border: 1px solid #ccc; }
+</style>
 </head>
 <body>
 
-<h2>Điều hướng + Gửi dữ liệu qua BLE</h2>
-
-<div>
-  <label>Điểm đến: </label>
-  <input type="text" id="destination" placeholder="Nhập địa chỉ..."/>
-  <button onclick="startNavigation()">Tính đường</button>
-  <button onclick="connectBLE()">Kết nối ESP32</button>
+<div id="map"></div>
+<div id="panel">
+  <input id="destination" placeholder="Nhập địa điểm đến..." style="width:70%">
+  <button id="btnRoute">📍 Tìm đường</button>
+  <hr>
+  <button id="btnScan">🔍 Quét thiết bị BLE</button>
+  <div id="devices"></div>
+  <h4>Log</h4>
+  <div id="log"></div>
 </div>
 
-<div id="map"></div>
-<div id="status"></div>
-
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 <script>
-let bleServer, bleService, bleCharacteristic;
-const SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E";
-const CHARACTERISTIC_UUID = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E";
-
-let map = L.map('map').setView([0, 0], 13);
+/* ================= MAP & ROUTING ================= */
+let map = L.map('map').setView([10.762622, 106.660172], 15);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  attribution: '© OpenStreetMap contributors'
+  attribution: '&copy; OpenStreetMap contributors'
 }).addTo(map);
 
-let control = L.Routing.control({
-  waypoints: [],
-  routeWhileDragging: true
-}).addTo(map);
+let currentMarker = null;
+let routeLine = null;
+let myLat = null, myLon = null;
 
-function connectBLE() {
-  navigator.bluetooth.requestDevice({
-    filters: [{ name: "ESP32_NAV" }],
-    optionalServices: [SERVICE_UUID]
-  })
-  .then(device => device.gatt.connect())
-  .then(server => {
-    bleServer = server;
-    return server.getPrimaryService(SERVICE_UUID);
-  })
-  .then(service => {
-    bleService = service;
-    return service.getCharacteristic(CHARACTERISTIC_UUID);
-  })
-  .then(characteristic => {
-    bleCharacteristic = characteristic;
-    document.getElementById("status").innerText = "✅ Đã kết nối ESP32";
-  })
-  .catch(err => console.error(err));
-}
+navigator.geolocation.watchPosition(pos => {
+  myLat = pos.coords.latitude;
+  myLon = pos.coords.longitude;
+  if (currentMarker) {
+    currentMarker.setLatLng([myLat, myLon]);
+  } else {
+    currentMarker = L.marker([myLat, myLon]).addTo(map);
+  }
+}, err => {
+  log("⚠️ Lỗi GPS:", err);
+}, { enableHighAccuracy: true });
 
-function startNavigation() {
-  if (!navigator.geolocation) {
-    alert("Trình duyệt không hỗ trợ GPS");
+document.getElementById("btnRoute").addEventListener("click", async () => {
+  const dest = document.getElementById("destination").value.trim();
+  if (!dest || !myLat) {
+    log("⚠️ Chưa có GPS hoặc chưa nhập điểm đến");
     return;
   }
+  // Geocode điểm đến
+  let geoUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(dest)}`;
+  let geoData = await fetch(geoUrl).then(r => r.json());
+  if (!geoData.length) {
+    log("❌ Không tìm thấy địa điểm");
+    return;
+  }
+  let destLat = parseFloat(geoData[0].lat);
+  let destLon = parseFloat(geoData[0].lon);
 
-  navigator.geolocation.getCurrentPosition(pos => {
-    let lat = pos.coords.latitude;
-    let lon = pos.coords.longitude;
+  // Lấy route từ OSRM
+  let routeUrl = `https://router.project-osrm.org/route/v1/driving/${myLon},${myLat};${destLon},${destLat}?overview=full&geometries=geojson&steps=true`;
+  let routeData = await fetch(routeUrl).then(r => r.json());
+  if (!routeData.routes || !routeData.routes.length) {
+    log("❌ Không lấy được route");
+    return;
+  }
+  let coords = routeData.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
+  if (routeLine) map.removeLayer(routeLine);
+  routeLine = L.polyline(coords, { color: 'blue' }).addTo(map);
+  map.fitBounds(routeLine.getBounds());
 
-    let dest = document.getElementById("destination").value;
-    fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(dest)}`)
-      .then(res => res.json())
-      .then(data => {
-        if (data.length === 0) {
-          alert("Không tìm thấy địa điểm");
-          return;
-        }
-        let lat2 = parseFloat(data[0].lat);
-        let lon2 = parseFloat(data[0].lon);
+  // Gửi hướng rẽ tiếp theo
+  let nextStep = routeData.routes[0].legs[0].steps[0];
+  let instruction = nextStep.maneuver.instruction;
+  let distance = nextStep.distance.toFixed(0) + " m";
+  log(`🛣️ Hướng: ${instruction} - ${distance}`);
+  sendData(`${instruction} | ${distance}`);
+});
 
-        control.setWaypoints([
-          L.latLng(lat, lon),
-          L.latLng(lat2, lon2)
-        ]);
+/* ================= BLE SCAN & CONNECT ================= */
+const logEl = document.getElementById("log");
+function log(...args) {
+  console.log(...args);
+  logEl.textContent += args.join(" ") + "\n";
+  logEl.scrollTop = logEl.scrollHeight;
+}
 
-        control.on('routesfound', function(e) {
-          let route = e.routes[0];
-          simulateMovement(route.coordinates);
-        });
-      });
+const devicesEl = document.getElementById("devices");
+let bleDevices = [];
+let serviceUuid = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+let writeCharacteristic = null;
+
+document.getElementById("btnScan").addEventListener("click", async () => {
+  try {
+    log("🔍 Yêu cầu chọn thiết bị BLE...");
+    const device = await navigator.bluetooth.requestDevice({
+      acceptAllDevices: true,
+      optionalServices: [serviceUuid]
+    });
+    log(`✅ Đã chọn: ${device.name || device.id}`);
+    bleDevices.push(device);
+    renderDevices();
+  } catch (err) {
+    log("❌ Lỗi:", err);
+  }
+});
+
+function renderDevices() {
+  devicesEl.innerHTML = "";
+  bleDevices.forEach(dev => {
+    const btn = document.createElement("button");
+    btn.textContent = `Kết nối: ${dev.name || dev.id}`;
+    btn.onclick = () => connectToDevice(dev);
+    devicesEl.appendChild(btn);
   });
 }
 
-async function sendBLEData(text) {
-  if (bleCharacteristic) {
-    let encoder = new TextEncoder();
-    await bleCharacteristic.writeValue(encoder.encode(text));
+async function connectToDevice(device) {
+  try {
+    log(`🔗 Kết nối tới ${device.name || device.id}...`);
+    const server = await device.gatt.connect();
+    log("✅ GATT Connected");
+    const service = await server.getPrimaryService(serviceUuid);
+    writeCharacteristic = await service.getCharacteristic("6e400002-b5a3-f393-e0a9-e50e24dcca9e");
+    log("✅ Sẵn sàng gửi dữ liệu");
+  } catch (err) {
+    log("❌ Kết nối lỗi:", err);
   }
 }
 
-function simulateMovement(coords) {
-  let i = 0;
-  let interval = setInterval(() => {
-    if (i >= coords.length - 1) {
-      clearInterval(interval);
-      sendBLEData("Đến nơi");
-      return;
-    }
-    let current = coords[i];
-    let next = coords[i+1];
-    let dist = map.distance(current, next).toFixed(1);
-
-    let direction = getDirection(current, next);
-    let msg = `Còn ${dist}m, ${direction}`;
-    sendBLEData(msg);
-    i++;
-  }, 2000);
-}
-
-function getDirection(p1, p2) {
-  let dx = p2.lng - p1.lng;
-  return dx > 0 ? "rẽ phải" : "rẽ trái";
+async function sendData(text) {
+  if (!writeCharacteristic) {
+    log("⚠️ Chưa kết nối BLE để gửi");
+    return;
+  }
+  let enc = new TextEncoder();
+  await writeCharacteristic.writeValue(enc.encode(text));
+  log("📤 Đã gửi:", text);
 }
 </script>
-
 </body>
 </html>
 
