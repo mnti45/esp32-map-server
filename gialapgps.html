@@ -19,19 +19,14 @@
   <label>Điểm đến: </label>
   <input type="text" id="destination" placeholder="Nhập địa chỉ..."/>
   <button onclick="startNavigation()">Tính đường</button>
-</div>
-
-<div>
-  <button onclick="scanBLE()">🔍 Quét thiết bị BLE</button>
-  <select id="deviceList"></select>
-  <button onclick="connectSelected()">Kết nối</button>
+  <button onclick="connectBLE()">Kết nối ESP32</button>
 </div>
 
 <div id="map"></div>
 <div id="status"></div>
 
 <script>
-let bleServer, bleService, bleCharacteristic, selectedDevice;
+let bleServer, bleService, bleCharacteristic;
 const SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E";
 const CHARACTERISTIC_UUID = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E";
 
@@ -45,48 +40,25 @@ let control = L.Routing.control({
   routeWhileDragging: true
 }).addTo(map);
 
-// Quét các thiết bị BLE
-async function scanBLE() {
-  try {
-    const device = await navigator.bluetooth.requestDevice({
-      acceptAllDevices: true,
-      optionalServices: [SERVICE_UUID]
-    });
-
-    selectedDevice = device;
-    let list = document.getElementById("deviceList");
-    let option = document.createElement("option");
-    option.value = device.id;
-    option.textContent = device.name || `Thiết bị không tên (${device.id})`;
-    list.appendChild(option);
-  } catch (err) {
-    console.error(err);
-  }
-}
-
-// Kết nối thiết bị đã chọn
-async function connectSelected() {
-  if (!selectedDevice) {
-    alert("Chưa chọn thiết bị");
-    return;
-  }
-  try {
-    const server = await selectedDevice.gatt.connect();
+function connectBLE() {
+  navigator.bluetooth.requestDevice({
+    filters: [{ name: "ESP32_NAV" }],
+    optionalServices: [SERVICE_UUID]
+  })
+  .then(device => device.gatt.connect())
+  .then(server => {
     bleServer = server;
-    bleService = await server.getPrimaryService(SERVICE_UUID);
-    bleCharacteristic = await bleService.getCharacteristic(CHARACTERISTIC_UUID);
-    document.getElementById("status").innerText = "✅ Đã kết nối " + (selectedDevice.name || "Thiết bị BLE");
-  } catch (err) {
-    console.error(err);
-  }
-}
-
-// Gửi dữ liệu BLE
-async function sendBLEData(text) {
-  if (bleCharacteristic) {
-    let encoder = new TextEncoder();
-    await bleCharacteristic.writeValue(encoder.encode(text));
-  }
+    return server.getPrimaryService(SERVICE_UUID);
+  })
+  .then(service => {
+    bleService = service;
+    return service.getCharacteristic(CHARACTERISTIC_UUID);
+  })
+  .then(characteristic => {
+    bleCharacteristic = characteristic;
+    document.getElementById("status").innerText = "✅ Đã kết nối ESP32";
+  })
+  .catch(err => console.error(err));
 }
 
 function startNavigation() {
@@ -123,6 +95,13 @@ function startNavigation() {
   });
 }
 
+async function sendBLEData(text) {
+  if (bleCharacteristic) {
+    let encoder = new TextEncoder();
+    await bleCharacteristic.writeValue(encoder.encode(text));
+  }
+}
+
 function simulateMovement(coords) {
   let i = 0;
   let interval = setInterval(() => {
@@ -134,6 +113,7 @@ function simulateMovement(coords) {
     let current = coords[i];
     let next = coords[i+1];
     let dist = map.distance(current, next).toFixed(1);
+
     let direction = getDirection(current, next);
     let msg = `Còn ${dist}m, ${direction}`;
     sendBLEData(msg);
