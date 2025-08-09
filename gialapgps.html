@@ -263,72 +263,68 @@ btnSimStart.addEventListener('click', () => {
   });
 
   simulatedInterval = setInterval(async () => {
-    if (currentSimIndex >= routeCoordinates.length) {
-      clearInterval(simulatedInterval);
-      log('Simulation finished: reached end');
-      if (writeChar) await sendToESP('Đã đến nơi');
-      return;
+  if (currentSimIndex >= routeCoordinates.length) {
+    clearInterval(simulatedInterval);
+    log('Simulation finished: reached end');
+    if (writeChar) await sendToESP('Đã đến nơi');
+    return;
+  }
+
+  const pos = routeCoordinates[currentSimIndex];
+  userMarker.setLatLng(pos);
+  map.panTo(pos);
+
+  // Tìm điểm quẹo tiếp theo mà user chưa tới
+  let nextMan = null;
+  for (let i = 0; i < maneuvers.length; i++) {
+    const distToMan = haversine(pos[0], pos[1], maneuvers[i].lat, maneuvers[i].lon);
+    if (distToMan > 5) { // cách > 5m
+      nextMan = maneuvers[i];
+      break;
     }
+  }
+  if (!nextMan && routeCoordinates.length) {
+    const last = routeCoordinates[routeCoordinates.length - 1];
+    nextMan = { lat: last[0], lon: last[1], modifier: 'arrived' };
+  }
 
-    const pos = routeCoordinates[currentSimIndex];
-    userMarker.setLatLng(pos);
-    map.panTo(pos);
+  const d = haversine(pos[0], pos[1], nextMan.lat, nextMan.lon);
+  const dir = normalizeModifier(nextMan.modifier || 'straight');
 
-    let nextMan = null;
-    let manIndex = 0;
-    for (let i = 0; i < maneuvers.length; i++) {
-      const md = haversine(pos[0], pos[1], maneuvers[i].lat, maneuvers[i].lon);
-      if (md > 1) {
-        nextMan = maneuvers[i];
-        manIndex = i;
-        break;
-      } else {
-        nextMan = maneuvers[i];
-        manIndex = i;
-        break;
-      }
+  function formatDistance(d){
+    if (d >= 1000) {
+      return (d/1000).toFixed(1).replace('.0','') + 'km';
+    } else {
+      return Math.round(d) + 'm';
     }
+  }
 
-    if (!nextMan && routeCoordinates.length) {
-      const last = routeCoordinates[routeCoordinates.length - 1];
-      nextMan = { lat: last[0], lon: last[1], modifier: 'arrived' };
+  function directionToText(dir){
+    switch(dir) {
+      case 'left': return 'quẹo trái';
+      case 'right': return 'quẹo phải';
+      case 'uturn': return 'quay đầu';
+      case 'straight': return 'đi thẳng';
+      case 'arrived': return 'đã đến nơi';
+      case 'roundabout': return 'vào vòng xuyến';
+      case 'sharp left': return 'quẹo trái gắt';
+      case 'slight left': return 'rẽ nhẹ trái';
+      case 'sharp right': return 'quẹo phải gắt';
+      case 'slight right': return 'rẽ nhẹ phải';
+      default: return dir;
     }
+  }
 
-    const d = haversine(pos[0], pos[1], nextMan.lat, nextMan.lon);
-    const dir = normalizeModifier(nextMan.modifier || 'straight');
+  const distText = formatDistance(d);
+  const dirText = directionToText(dir);
+  const message = dir === 'arrived' ? 'Đã đến nơi' : `Còn ${distText} nữa ${dirText}`;
 
-    function formatDistance(d){
-      if (d >= 1000) {
-        return (d/1000).toFixed(1).replace('.0','') + 'km';
-      } else {
-        return Math.round(d) + 'm';
-      }
-    }
+  if (writeChar) await sendToESP(message);
+  log('Sim pos idx', currentSimIndex, '-> gửi:', message);
 
-    function directionToText(dir){
-      switch(dir) {
-        case 'left': return 'quẹo trái';
-        case 'right': return 'quẹo phải';
-        case 'uturn': return 'quay đầu';
-        case 'straight': return 'đi thẳng';
-        case 'arrived': return 'đã đến nơi';
-        case 'roundabout': return 'vào vòng xuyến';
-        default: return dir;
-      }
-    }
+  currentSimIndex += 1;  // tăng chậm để đếm lùi chính xác
+}, 1000);
 
-    const distText = formatDistance(d);
-    const dirText = directionToText(dir);
-    const message = `Còn ${distText} nữa ${dirText}`;
-    if (writeChar) await sendToESP(message);
-    log('Sim pos idx', currentSimIndex, '-> gửi:', message);
-
-    currentSimIndex += Math.max(1, Math.floor(routeCoordinates.length / 200));
-    if (currentSimIndex >= routeCoordinates.length) {
-      currentSimIndex = routeCoordinates.length;
-    }
-  }, 1000);
-});
 
 btnSimStop.addEventListener('click', () => {
   if (simulatedInterval) { clearInterval(simulatedInterval); simulatedInterval = null; log('Simulation stopped'); }
@@ -358,4 +354,5 @@ log('Trang sẵn sàng. Lưu ý: bấm "Quét BLE" để chọn thiết bị, ch
 </script>
 </body>
 </html>
+
 
