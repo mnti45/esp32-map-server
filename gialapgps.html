@@ -1,23 +1,93 @@
 <!DOCTYPE html>
 <html lang="vi">
 <head>
-<meta charset="utf-8"/>
-<title>BLE Scan & Connect</title>
+<meta charset="utf-8">
+<title>Map + BLE</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
 <style>
-  body { font-family: Arial; margin: 20px; }
-  button { padding: 8px 12px; margin: 6px; }
-  #devices { margin-top: 10px; }
-  #log { white-space: pre-wrap; background: #f7f7f7; padding: 10px; border: 1px solid #ddd; height: 200px; overflow: auto; }
+  body { font-family: Arial; margin: 0; padding: 0; }
+  #map { height: 50vh; }
+  #panel { padding: 10px; }
+  button { padding: 8px 12px; margin: 4px; }
+  #devices { margin-top: 6px; }
+  #log { font-size: 14px; background: #f7f7f7; padding: 8px; height: 180px; overflow-y: auto; border: 1px solid #ccc; }
 </style>
 </head>
 <body>
-<h2>Quét & Kết nối BLE</h2>
-<button id="btnScan">🔍 Quét thiết bị BLE</button>
-<div id="devices"></div>
-<h4>Log</h4>
-<div id="log"></div>
 
+<div id="map"></div>
+<div id="panel">
+  <input id="destination" placeholder="Nhập địa điểm đến..." style="width:70%">
+  <button id="btnRoute">📍 Tìm đường</button>
+  <hr>
+  <button id="btnScan">🔍 Quét thiết bị BLE</button>
+  <div id="devices"></div>
+  <h4>Log</h4>
+  <div id="log"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 <script>
+/* ================= MAP & ROUTING ================= */
+let map = L.map('map').setView([10.762622, 106.660172], 15);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '&copy; OpenStreetMap contributors'
+}).addTo(map);
+
+let currentMarker = null;
+let routeLine = null;
+let myLat = null, myLon = null;
+
+navigator.geolocation.watchPosition(pos => {
+  myLat = pos.coords.latitude;
+  myLon = pos.coords.longitude;
+  if (currentMarker) {
+    currentMarker.setLatLng([myLat, myLon]);
+  } else {
+    currentMarker = L.marker([myLat, myLon]).addTo(map);
+  }
+}, err => {
+  log("⚠️ Lỗi GPS:", err);
+}, { enableHighAccuracy: true });
+
+document.getElementById("btnRoute").addEventListener("click", async () => {
+  const dest = document.getElementById("destination").value.trim();
+  if (!dest || !myLat) {
+    log("⚠️ Chưa có GPS hoặc chưa nhập điểm đến");
+    return;
+  }
+  // Geocode điểm đến
+  let geoUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(dest)}`;
+  let geoData = await fetch(geoUrl).then(r => r.json());
+  if (!geoData.length) {
+    log("❌ Không tìm thấy địa điểm");
+    return;
+  }
+  let destLat = parseFloat(geoData[0].lat);
+  let destLon = parseFloat(geoData[0].lon);
+
+  // Lấy route từ OSRM
+  let routeUrl = `https://router.project-osrm.org/route/v1/driving/${myLon},${myLat};${destLon},${destLat}?overview=full&geometries=geojson&steps=true`;
+  let routeData = await fetch(routeUrl).then(r => r.json());
+  if (!routeData.routes || !routeData.routes.length) {
+    log("❌ Không lấy được route");
+    return;
+  }
+  let coords = routeData.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
+  if (routeLine) map.removeLayer(routeLine);
+  routeLine = L.polyline(coords, { color: 'blue' }).addTo(map);
+  map.fitBounds(routeLine.getBounds());
+
+  // Gửi hướng rẽ tiếp theo
+  let nextStep = routeData.routes[0].legs[0].steps[0];
+  let instruction = nextStep.maneuver.instruction;
+  let distance = nextStep.distance.toFixed(0) + " m";
+  log(`🛣️ Hướng: ${instruction} - ${distance}`);
+  sendData(`${instruction} | ${distance}`);
+});
+
+/* ================= BLE SCAN & CONNECT ================= */
 const logEl = document.getElementById("log");
 function log(...args) {
   console.log(...args);
@@ -26,7 +96,6 @@ function log(...args) {
 }
 
 const devicesEl = document.getElementById("devices");
-
 let bleDevices = [];
 let serviceUuid = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
 let writeCharacteristic = null;
@@ -39,7 +108,6 @@ document.getElementById("btnScan").addEventListener("click", async () => {
       optionalServices: [serviceUuid]
     });
     log(`✅ Đã chọn: ${device.name || device.id}`);
-
     bleDevices.push(device);
     renderDevices();
   } catch (err) {
@@ -49,7 +117,7 @@ document.getElementById("btnScan").addEventListener("click", async () => {
 
 function renderDevices() {
   devicesEl.innerHTML = "";
-  bleDevices.forEach((dev, idx) => {
+  bleDevices.forEach(dev => {
     const btn = document.createElement("button");
     btn.textContent = `Kết nối: ${dev.name || dev.id}`;
     btn.onclick = () => connectToDevice(dev);
@@ -62,15 +130,9 @@ async function connectToDevice(device) {
     log(`🔗 Kết nối tới ${device.name || device.id}...`);
     const server = await device.gatt.connect();
     log("✅ GATT Connected");
-
     const service = await server.getPrimaryService(serviceUuid);
-    log("✅ Service OK");
-
     writeCharacteristic = await service.getCharacteristic("6e400002-b5a3-f393-e0a9-e50e24dcca9e");
-    log("✅ Characteristic OK - Sẵn sàng gửi dữ liệu");
-
-    // Test gửi tin
-    await sendData("Hello ESP32");
+    log("✅ Sẵn sàng gửi dữ liệu");
   } catch (err) {
     log("❌ Kết nối lỗi:", err);
   }
@@ -78,7 +140,7 @@ async function connectToDevice(device) {
 
 async function sendData(text) {
   if (!writeCharacteristic) {
-    log("⚠️ Chưa kết nối để gửi");
+    log("⚠️ Chưa kết nối BLE để gửi");
     return;
   }
   let enc = new TextEncoder();
