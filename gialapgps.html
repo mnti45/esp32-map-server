@@ -85,12 +85,10 @@ function log(...args){
 btnScan.addEventListener('click', async () => {
   try {
     log('Yêu cầu chọn thiết bị (mở hộp chọn của trình duyệt)...');
-    // requestDevice will open OS chooser - user picks one device
     const device = await navigator.bluetooth.requestDevice({
       acceptAllDevices: true,
       optionalServices: [SERVICE_UUID]
     });
-    // add to known list
     if (!knownDevices[device.id]) {
       knownDevices[device.id] = device;
       const opt = document.createElement('option');
@@ -98,7 +96,6 @@ btnScan.addEventListener('click', async () => {
       opt.text = device.name || ('Device ' + device.id.slice(0,6));
       deviceList.appendChild(opt);
       log('Thiết bị thêm vào danh sách:', device.name || device.id);
-      // auto-select the newly added device
       deviceList.value = device.id;
     } else {
       log('Thiết bị đã tồn tại trong danh sách:', device.name || device.id);
@@ -186,7 +183,7 @@ async function computeRoute(origLat, origLon, destLat, destLon){
   if (!data.routes || data.routes.length === 0) {
     throw new Error('Không tìm đường');
   }
-  return data.routes[0]; // contains geometry and legs[0].steps
+  return data.routes[0];
 }
 
 /* ====== Use current position as origin (get once) ====== */
@@ -225,24 +222,21 @@ btnRoute.addEventListener('click', async () => {
     const route = await computeRoute(originLat, originLon, dest.lat, dest.lon);
 
     // vẽ path
-    const coords = route.geometry.coordinates.map(c => [c[1], c[0]]); // [lat,lng]
+    const coords = route.geometry.coordinates.map(c => [c[1], c[0]]);
     routeCoordinates = coords;
     if (routeLine) map.removeLayer(routeLine);
     routeLine = L.polyline(coords, {color:'blue', weight:5, opacity:0.8}).addTo(map);
     map.fitBounds(routeLine.getBounds());
 
-    // lấy steps (OSRM)
     if (route.legs && route.legs.length && route.legs[0].steps) {
-      osrmSteps = route.legs[0].steps; // each step has maneuver {location: [lon,lat], modifier: "left"/"right"/...}, distance, name, geometry...
+      osrmSteps = route.legs[0].steps;
       log('Có', osrmSteps.length, 'bước.');
-      // show first step in log
       log('Bước 1:', osrmSteps[0].maneuver.instruction || osrmSteps[0].maneuver.type || JSON.stringify(osrmSteps[0].maneuver));
     } else {
       osrmSteps = [];
       log('Không có steps chi tiết từ OSRM');
     }
 
-    // center on origin
     currentSimIndex = 0;
     userMarker.setLatLng(routeCoordinates[0]);
     map.panTo(routeCoordinates[0]);
@@ -253,13 +247,12 @@ btnRoute.addEventListener('click', async () => {
   }
 });
 
-/* ====== Simulation: move along routeCoordinates, send distance to next maneuver + modifier ====== */
+/* ====== Simulation: move along routeCoordinates, send formatted distance + direction to ESP32 ====== */
 btnSimStart.addEventListener('click', () => {
   if (!routeCoordinates || routeCoordinates.length < 2) { alert('Chưa có route'); return; }
   if (!writeChar) log('Chú ý: chưa kết nối BLE, chỉ mô phỏng map (không gửi).');
   if (simulatedInterval) { clearInterval(simulatedInterval); simulatedInterval = null; }
 
-  // Precompute maneuver points as latlngs from osrmSteps
   const maneuvers = osrmSteps.map(s => {
     return {
       lat: s.maneuver.location[1],
@@ -273,7 +266,7 @@ btnSimStart.addEventListener('click', () => {
     if (currentSimIndex >= routeCoordinates.length) {
       clearInterval(simulatedInterval);
       log('Simulation finished: reached end');
-      if (writeChar) await sendToESP('0|arrived');
+      if (writeChar) await sendToESP('Đã đến nơi');
       return;
     }
 
@@ -281,43 +274,58 @@ btnSimStart.addEventListener('click', () => {
     userMarker.setLatLng(pos);
     map.panTo(pos);
 
-    // find next maneuver that is ahead of currentSimIndex
-    // we'll compute distance to the nearest next maneuver (first maneuver whose distance > 2m)
     let nextMan = null;
     let manIndex = 0;
     for (let i = 0; i < maneuvers.length; i++) {
       const md = haversine(pos[0], pos[1], maneuvers[i].lat, maneuvers[i].lon);
-      if (md > 1) { // it's ahead (not exactly at)
+      if (md > 1) {
         nextMan = maneuvers[i];
         manIndex = i;
         break;
       } else {
-        // if currently very close (<1m), we consider it's the next immediate
         nextMan = maneuvers[i];
         manIndex = i;
         break;
       }
     }
 
-    // if no nextMan found, use final dest
     if (!nextMan && routeCoordinates.length) {
       const last = routeCoordinates[routeCoordinates.length - 1];
       nextMan = { lat: last[0], lon: last[1], modifier: 'arrived' };
     }
 
-    // compute distance to next maneuver
     const d = haversine(pos[0], pos[1], nextMan.lat, nextMan.lon);
     const dir = normalizeModifier(nextMan.modifier || 'straight');
 
-    // send short message: "<distance_m_rounded>|<dir>"
-    const distRound = Math.round(d);
-    const message = `${distRound}|${dir}`;
-    if (writeChar) await sendToESP(message);
-    log('Sim pos idx', currentSimIndex, '-> next maneuver', manIndex, 'dist(m)=', distRound, 'dir=', dir);
+    function formatDistance(d){
+      if (d >= 1000) {
+        return (d/1000).toFixed(1).replace('.0','') + 'km';
+      } else {
+        return Math.round(d) + 'm';
+      }
+    }
 
-    currentSimIndex += Math.max(1, Math.floor(routeCoordinates.length / 200)); // step increment (tweak for speed)
+    function directionToText(dir){
+      switch(dir) {
+        case 'left': return 'quẹo trái';
+        case 'right': return 'quẹo phải';
+        case 'uturn': return 'quay đầu';
+        case 'straight': return 'đi thẳng';
+        case 'arrived': return 'đã đến nơi';
+        case 'roundabout': return 'vào vòng xuyến';
+        default: return dir;
+      }
+    }
+
+    const distText = formatDistance(d);
+    const dirText = directionToText(dir);
+    const message = `Còn ${distText} nữa ${dirText}`;
+    if (writeChar) await sendToESP(message);
+    log('Sim pos idx', currentSimIndex, '-> gửi:', message);
+
+    currentSimIndex += Math.max(1, Math.floor(routeCoordinates.length / 200));
     if (currentSimIndex >= routeCoordinates.length) {
-      currentSimIndex = routeCoordinates.length; // will finish next loop
+      currentSimIndex = routeCoordinates.length;
     }
   }, 1000);
 });
@@ -342,22 +350,12 @@ function normalizeModifier(m){
   if (m.includes('right')) return 'right';
   if (m.includes('u')) return 'uturn';
   if (m.includes('straight') || m.includes('continue')) return 'straight';
+  if (m.includes('roundabout')) return 'roundabout';
   return m;
-}
-
-/* ====== Helper: send message wrapper (uses writeChar) ====== */
-async function sendToESP(msg){
-  if (!writeChar) { log('(BLE not connected) would send:', msg); return; }
-  try {
-    const enc = new TextEncoder();
-    await writeChar.writeValue(enc.encode(msg));
-    log('BLE sent ->', msg);
-  } catch (err) {
-    log('BLE send error:', err);
-  }
 }
 
 log('Trang sẵn sàng. Lưu ý: bấm "Quét BLE" để chọn thiết bị, chọn thiết bị trong list và bấm Connect trước khi gửi.');
 </script>
 </body>
 </html>
+
