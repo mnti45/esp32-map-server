@@ -1,47 +1,383 @@
 <!DOCTYPE html>
 <html lang="vi">
 <head>
-<meta charset="UTF-8">
-<title>Quét & Kết nối BLE</title>
+<meta charset="utf-8"/>
+<title>OSM Navigation + BLE (GPS Thật, Tần suất gửi theo khoảng cách)</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
 <style>
-    body { font-family: sans-serif; text-align: center; margin-top: 50px; }
-    button { padding: 12px 24px; font-size: 18px; cursor: pointer; }
+  body{font-family:Arial;margin:0}
+  #top { padding:10px; background:#f4f4f4; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  #map{height:60vh}
+  input[type="text"]{padding:6px; width:260px}
+  button{padding:6px 10px}
+  #devices { margin-left:8px; }
+  #log { height:160px; overflow:auto; padding:8px; background:#fff; border-top:1px solid #ddd; font-size:13px; }
+  .small { font-size:13px; color:#444; }
 </style>
 </head>
 <body>
 
-<h1>Quét & Kết nối BLE</h1>
-<button id="scanBtn">🔍 Quét BLE</button>
-<p id="status"></p>
+<div id="top">
+  <div>
+    <strong>Điểm đến:</strong>
+    <input id="destInput" type="text" placeholder="Nhập địa chỉ (ví dụ: Ben Thanh, Ho Chi Minh)" />
+    <button id="btnRoute">Tính đường</button>
+  </div>
+
+  <div>
+    <button id="btnScan">🔍 Quét BLE</button>
+    <select id="deviceList" style="min-width:220px"></select>
+    <button id="btnConnect">Kết nối</button>
+    <button id="btnDisconnect">Ngắt</button>
+  </div>
+
+  <div>
+    <button id="btnTrackStart">▶ Start Tracking (GPS Thật)</button>
+    <button id="btnTrackStop">⏸ Stop Tracking</button>
+    <label class="small">(Phải CONNECT trước khi gửi BLE)</label>
+  </div>
+</div>
+
+<div id="map"></div>
+<div id="log"></div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 
 <script>
-document.getElementById('scanBtn').addEventListener('click', async () => {
-    const statusEl = document.getElementById('status');
-    statusEl.textContent = "Đang quét thiết bị BLE...";
-    try {
-        const device = await navigator.bluetooth.requestDevice({
-            acceptAllDevices: true,
-            optionalServices: ['battery_service'] // Có thể đổi service khác
-        });
-        statusEl.textContent = "Đã chọn: " + (device.name || "Không tên");
+const SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const CHAR_UUID    = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
 
-        // Kết nối GATT
-        const server = await device.gatt.connect();
-        statusEl.textContent += "\nĐã kết nối thành công!";
+const map = L.map('map').setView([10.762622, 106.660172], 13);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© OpenStreetMap contributors'
+}).addTo(map);
 
-        // Ví dụ: đọc mức pin nếu có dịch vụ battery_service
-        const service = await server.getPrimaryService('battery_service');
-        const characteristic = await service.getCharacteristic('battery_level');
-        const value = await characteristic.readValue();
-        const batteryLevel = value.getUint8(0);
-        statusEl.textContent += `\nPin: ${batteryLevel}%`;
+let userMarker = L.marker([10.762622, 106.660172]).addTo(map);
+let routeLine = null;
 
-    } catch (err) {
-        statusEl.textContent = "Lỗi: " + err;
-        console.error(err);
+const btnScan = document.getElementById('btnScan');
+const deviceList = document.getElementById('deviceList');
+const btnConnect = document.getElementById('btnConnect');
+const btnDisconnect = document.getElementById('btnDisconnect');
+const btnRoute = document.getElementById('btnRoute');
+const destInput = document.getElementById('destInput');
+const logEl = document.getElementById('log');
+const btnTrackStart = document.getElementById('btnTrackStart');
+const btnTrackStop = document.getElementById('btnTrackStop');
+
+let knownDevices = {};
+let connectedDevice = null;
+let gattServer = null;
+let writeChar = null;
+
+function log(...args){
+  const line = args.map(a => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ');
+  logEl.innerText = (new Date().toLocaleTimeString()) + '  ' + line + '\n' + logEl.innerText;
+}
+
+btnScan.addEventListener('click', async () => {
+  try {
+    log('Yêu cầu chọn thiết bị (mở hộp chọn của trình duyệt)...');
+    const device = await navigator.bluetooth.requestDevice({
+      acceptAllDevices: true,
+      optionalServices: [SERVICE_UUID]
+    });
+    if (!knownDevices[device.id]) {
+      knownDevices[device.id] = device;
+      const opt = document.createElement('option');
+      opt.value = device.id;
+      opt.text = device.name || ('Device ' + device.id.slice(0,6));
+      deviceList.appendChild(opt);
+      log('Thiết bị thêm vào danh sách:', device.name || device.id);
+      deviceList.value = device.id;
+    } else {
+      log('Thiết bị đã tồn tại trong danh sách:', device.name || device.id);
     }
+  } catch (err) {
+    log('Lỗi khi quét:', err);
+  }
 });
-</script>
 
+btnConnect.addEventListener('click', async () => {
+  const id = deviceList.value;
+  if (!id) { alert('Chưa chọn thiết bị'); return; }
+  const device = knownDevices[id];
+  if (!device) { alert('Thiết bị đã bị mất, hãy quét lại'); return; }
+
+  try {
+    log('Kết nối tới thiết bị...', device.name || device.id);
+    gattServer = await device.gatt.connect();
+    connectedDevice = device;
+    log('GATT connected');
+
+    const service = await gattServer.getPrimaryService(SERVICE_UUID);
+    writeChar = await service.getCharacteristic(CHAR_UUID);
+    log('Lấy characteristic ghi thành công');
+
+    device.addEventListener('gattserverdisconnected', () => {
+      log('Device disconnected:', device.name || device.id);
+      connectedDevice = null;
+      gattServer = null;
+      writeChar = null;
+    });
+
+    alert('Kết nối BLE thành công: ' + (device.name || device.id));
+  } catch (err) {
+    log('Kết nối lỗi:', err);
+    alert('Kết nối lỗi: ' + (err.message || err));
+  }
+});
+
+btnDisconnect.addEventListener('click', () => {
+  if (connectedDevice && connectedDevice.gatt.connected) {
+    connectedDevice.gatt.disconnect();
+    log('Đã ngắt kết nối');
+  } else {
+    log('Không có thiết bị kết nối');
+  }
+});
+
+async function sendToESP(msg){
+  if (!writeChar) {
+    log('Chưa có characteristic để ghi - chưa kết nối?');
+    return;
+  }
+  try {
+    const enc = new TextEncoder();
+    await writeChar.writeValue(enc.encode(msg));
+    log('Gửi tới ESP32:', msg);
+  } catch (err) {
+    log('Lỗi gửi BLE:', err);
+  }
+}
+
+async function geocode(q){
+  const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}`;
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+    if (!data || data.length === 0) return null;
+    return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon), display_name: data[0].display_name };
+  } catch(e) {
+    log('Geocode lỗi:', e);
+    return null;
+  }
+}
+
+async function computeRoute(origLat, origLon, destLat, destLon){
+  const url = `https://router.project-osrm.org/route/v1/driving/${origLon},${origLat};${destLon},${destLat}?overview=full&geometries=geojson&steps=true`;
+  const res = await fetch(url);
+  const data = await res.json();
+  if (!data.routes || data.routes.length === 0) {
+    throw new Error('Không tìm đường');
+  }
+  return data.routes[0];
+}
+
+async function getCurrentPositionPromise(){
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) return reject(new Error('GPS không hỗ trợ'));
+    navigator.geolocation.getCurrentPosition(p => resolve(p.coords), err => reject(err), { enableHighAccuracy: true, timeout:10000 });
+  });
+}
+
+function deg2rad(d){ return d * Math.PI/180; }
+function haversine(lat1, lon1, lat2, lon2) {
+  const R=6371000;
+  const dLat = deg2rad(lat2-lat1);
+  const dLon = deg2rad(lon2-lon1);
+  const a = Math.sin(dLat/2)*Math.sin(dLat/2) + Math.cos(deg2rad(lat1))*Math.cos(deg2rad(lat2))*Math.sin(dLon/2)*Math.sin(dLon/2);
+  const c = 2*Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R*c;
+}
+function normalizeModifier(m){
+  m = (m||'straight').toLowerCase();
+  if (m.includes('left')) return 'left';
+  if (m.includes('right')) return 'right';
+  if (m.includes('u')) return 'uturn';
+  if (m.includes('straight') || m.includes('continue')) return 'straight';
+  if (m.includes('roundabout')) return 'roundabout';
+  return m;
+}
+
+function findNextManeuverIndex(currentIndex, maneuvers, routeCoords) {
+  for (let i = 0; i < maneuvers.length; i++) {
+    let minDist = Infinity;
+    let closestIdx = -1;
+    for (let j = currentIndex; j < routeCoords.length; j++) {
+      const d = haversine(routeCoords[j][0], routeCoords[j][1], maneuvers[i].lat, maneuvers[i].lon);
+      if (d < minDist) {
+        minDist = d;
+        closestIdx = j;
+      }
+    }
+    if (closestIdx > currentIndex) {
+      return {manIdx: i, coordIdx: closestIdx};
+    }
+  }
+  return null;
+}
+
+let routeCoordinates = [];
+let osrmSteps = [];
+
+btnRoute.addEventListener('click', async () => {
+  const destText = destInput.value.trim();
+  if (!destText) { alert('Nhập điểm đến'); return; }
+
+  try {
+    log('Lấy vị trí hiện tại...');
+    const cur = await getCurrentPositionPromise();
+    const originLat = cur.latitude;
+    const originLon = cur.longitude;
+    userMarker.setLatLng([originLat, originLon]);
+    map.setView([originLat, originLon], 14);
+    log('Vị trí hiện tại:', originLat.toFixed(6), originLon.toFixed(6));
+
+    log('Geocode điểm đến...');
+    const dest = await geocode(destText);
+    if (!dest) { alert('Không tìm thấy địa điểm'); return; }
+    log('Địa điểm tìm được:', dest.display_name, dest.lat, dest.lon);
+
+    log('Tính đường với OSRM...');
+    const route = await computeRoute(originLat, originLon, dest.lat, dest.lon);
+
+    const coords = route.geometry.coordinates.map(c => [c[1], c[0]]);
+    routeCoordinates = coords;
+    if (routeLine) map.removeLayer(routeLine);
+    routeLine = L.polyline(coords, {color:'blue', weight:5, opacity:0.8}).addTo(map);
+    map.fitBounds(routeLine.getBounds());
+
+    if (route.legs && route.legs.length && route.legs[0].steps) {
+      osrmSteps = route.legs[0].steps;
+      log('Có', osrmSteps.length, 'bước.');
+      log('Bước 1:', osrmSteps[0].maneuver.instruction || osrmSteps[0].maneuver.type || JSON.stringify(osrmSteps[0].maneuver));
+    } else {
+      osrmSteps = [];
+      log('Không có steps chi tiết từ OSRM');
+    }
+
+    userMarker.setLatLng(routeCoordinates[0]);
+    map.panTo(routeCoordinates[0]);
+    log('Route ready. Bấm Start Tracking để theo dõi vị trí thật và gửi BLE.');
+  } catch (err) {
+    log('Lỗi tính đường:', err);
+    alert('Lỗi: ' + (err.message || err));
+  }
+});
+
+let watchId = null;
+let lastSentPosition = null;
+let currentManeuverIndex = 0;
+
+btnTrackStart.addEventListener('click', async () => {
+  if (!routeCoordinates || routeCoordinates.length < 2) {
+    alert('Chưa có route');
+    return;
+  }
+  if (!writeChar) log('Chú ý: chưa kết nối BLE, chỉ xem vị trí trên map.');
+
+  const maneuvers = osrmSteps.map(s => ({
+    lat: s.maneuver.location[1],
+    lon: s.maneuver.location[0],
+    modifier: (s.maneuver.modifier || 'straight'),
+    instruction: s.maneuver.instruction || (s.name || ''),
+    name: s.name || ''
+  }));
+
+  currentManeuverIndex = 0;
+  lastSentPosition = null;
+
+  if (watchId) navigator.geolocation.clearWatch(watchId);
+
+  watchId = navigator.geolocation.watchPosition(async pos => {
+    const { latitude, longitude } = pos.coords;
+    userMarker.setLatLng([latitude, longitude]);
+    map.panTo([latitude, longitude]);
+
+    // Cập nhật maneuver index
+    while (currentManeuverIndex < maneuvers.length) {
+      const man = maneuvers[currentManeuverIndex];
+      const distToMan = haversine(latitude, longitude, man.lat, man.lon);
+      if (distToMan < 15) {
+        currentManeuverIndex++;
+      } else {
+        break;
+      }
+    }
+
+    if (currentManeuverIndex >= maneuvers.length) {
+      log('Đã đến nơi');
+      if (writeChar) await sendToESP('Đã đến nơi');
+      return;
+    }
+
+    const nextMan = maneuvers[currentManeuverIndex];
+    const distToNextMan = haversine(latitude, longitude, nextMan.lat, nextMan.lon);
+
+    if (lastSentPosition) {
+      const distMoved = haversine(latitude, longitude, lastSentPosition.lat, lastSentPosition.lon);
+      let threshold = 100;
+
+      if (distToNextMan > 1000) threshold = 100;
+      else if (distToNextMan > 100) threshold = 50;
+      else threshold = 10;
+
+      if (distMoved < threshold) {
+        return; // chưa đủ di chuyển gửi tiếp
+      }
+    }
+
+    let currentRoadName = '';
+    if (currentManeuverIndex > 0 && maneuvers[currentManeuverIndex -1]) {
+      currentRoadName = maneuvers[currentManeuverIndex -1].name || '';
+    } else if (maneuvers.length > 0) {
+      currentRoadName = maneuvers[0].name || '';
+    }
+
+    const nextRoadName = nextMan.name || '';
+
+    const distText = distToNextMan >= 1000 ? (distToNextMan/1000).toFixed(1).replace('.0','') + 'km' : Math.round(distToNextMan) + 'm';
+
+    function directionToText(dir){
+      switch(dir) {
+        case 'left': return 'quẹo trái';
+        case 'right': return 'quẹo phải';
+        case 'uturn': return 'quay đầu';
+        case 'straight': return 'đi thẳng';
+        case 'arrived': return 'đã đến nơi';
+        case 'roundabout': return 'vào vòng xuyến';
+        case 'sharp left': return 'quẹo trái gắt';
+        case 'slight left': return 'rẽ nhẹ trái';
+        case 'sharp right': return 'quẹo phải gắt';
+        case 'slight right': return 'rẽ nhẹ phải';
+        default: return dir;
+      }
+    }
+    const dirText = directionToText(nextMan.modifier || 'straight');
+
+    const message = `Còn ${distText} nữa ${dirText}. Đường hiện tại: ${currentRoadName || 'Không rõ'}, Sắp quẹo vào: ${nextRoadName || 'Không rõ'}`;
+
+    if (writeChar) await sendToESP(message);
+    log(`Vị trí thực gửi BLE: ${latitude.toFixed(6)},${longitude.toFixed(6)};`, message);
+
+    lastSentPosition = { lat: latitude, lon: longitude };
+  }, err => {
+    log('Lỗi GPS:', err.message);
+  }, { enableHighAccuracy:true, maximumAge:500, timeout:10000 });
+});
+
+btnTrackStop.addEventListener('click', () => {
+  if (watchId) {
+    navigator.geolocation.clearWatch(watchId);
+    watchId = null;
+    log('Dừng gửi vị trí thật');
+  }
+});
+
+log('Trang sẵn sàng. Lưu ý: bấm "Quét BLE" để chọn thiết bị, chọn thiết bị trong list và bấm Connect trước khi gửi.');
+</script>
 </body>
 </html>
+
