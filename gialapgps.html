@@ -146,7 +146,10 @@ document.getElementById('btnRoute').addEventListener('click', async () => {
 
   const { latitude, longitude } = pos.coords;
   const dest = await geocode(destText);
+  if (!dest) return alert('Không tìm thấy địa chỉ này');
+
   const route = await computeRoute(latitude, longitude, dest.lat, dest.lon);
+  if (!route) return alert('Không tính được lộ trình');
 
   fullRoute = route.geometry.coordinates.map(c => ({ lat: c[1], lon: c[0] }));
   fullManeuvers = (route.legs[0]?.steps || []).map(s => ({
@@ -196,7 +199,8 @@ document.getElementById('btnSendRoute').addEventListener('click', async () => {
   const BATCH_SIZE = 5;
   const enc = new TextEncoder();
   const progressEl = document.getElementById('progress');
-  const total = fullRoute
+  const total = fullRoute.length;
+
   for (let i = 0; i < total; i += BATCH_SIZE) {
     const batch = [];
 
@@ -219,9 +223,12 @@ document.getElementById('btnSendRoute').addEventListener('click', async () => {
     const msg = JSON.stringify(batch);
     await writeChar.writeValue(enc.encode(msg));
     progressEl.innerText = `Đã gửi ${Math.min(i + BATCH_SIZE, total)}/${total} (${Math.round(Math.min(i + BATCH_SIZE, total) / total * 100)}%)`;
-    await new Promise(r => setTimeout(r, 80)); // delay giữa các batch
+    await new Promise(r => setTimeout(r, 80));
   }
 
   log('Đã gửi toàn bộ dữ liệu (dạng batch)');
   progressEl.innerText = 'Hoàn tất!';
 });
+</script>
+</body>
+</html>
