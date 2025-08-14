@@ -6,19 +6,39 @@
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
   <style>
-    body { font-family: Arial; margin: 0 }
-    #top { padding: 10px; background: #f4f4f4; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
-    #map { height: 60vh }
+    body { font-family: Arial; margin: 0; display: flex; flex-direction: column; height: 100vh; }
+    #map { flex: 1; }
+    #controls {
+      padding: 10px;
+      background: #f4f4f4;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      border-top: 1px solid #ccc;
+    }
     input[type="text"] { padding: 6px; width: 260px }
     button { padding: 6px 10px }
-    #log { height: 160px; overflow: auto; background: #fff; border-top: 1px solid #ddd; font-size: 13px; padding: 8px; }
-    .small { font-size: 13px; color: #555; }
-    #progress { margin-left: 10px; color: green; font-weight: bold; }
+    #log {
+      height: 160px;
+      overflow: auto;
+      background: #fff;
+      border-top: 1px solid #ddd;
+      font-size: 13px;
+      padding: 8px;
+    }
+    #progress {
+      margin-left: 10px;
+      color: green;
+      font-weight: bold;
+    }
   </style>
 </head>
 <body>
 
-<div id="top">
+<div id="map"></div>
+
+<div id="controls">
   <div>
     <strong>Điểm đến:</strong>
     <input id="destInput" type="text" placeholder="Nhập địa chỉ (ví dụ: Bến Thành)" />
@@ -38,7 +58,6 @@
   </div>
 </div>
 
-<div id="map"></div>
 <div id="log"></div>
 
 <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
@@ -117,7 +136,14 @@ document.getElementById('btnRoute').addEventListener('click', async () => {
   const destText = document.getElementById('destInput').value.trim();
   if (!destText) return alert('Nhập địa điểm');
 
-  const pos = await new Promise((res, rej) => navigator.geolocation.getCurrentPosition(res, rej));
+  const pos = await new Promise((res, rej) =>
+    navigator.geolocation.getCurrentPosition(res, rej, {
+      enableHighAccuracy: true,
+      timeout: 10000,
+      maximumAge: 0
+    })
+  );
+
   const { latitude, longitude } = pos.coords;
   const dest = await geocode(destText);
   const route = await computeRoute(latitude, longitude, dest.lat, dest.lon);
@@ -167,17 +193,16 @@ function matchManeuverAt(index) {
 document.getElementById('btnSendRoute').addEventListener('click', async () => {
   if (!writeChar || !connectedDevice) return alert('Chưa kết nối BLE');
 
-  const BATCH_SIZE = 5;  // Gửi 5 điểm mỗi lần
+  const BATCH_SIZE = 5;
   const enc = new TextEncoder();
   const progressEl = document.getElementById('progress');
-  const total = fullRoute.length;
-
+  const total = fullRoute
   for (let i = 0; i < total; i += BATCH_SIZE) {
     const batch = [];
 
     for (let j = i; j < i + BATCH_SIZE && j < total; j++) {
       const p = fullRoute[j];
-           const m = matchManeuverAt(j);
+      const m = matchManeuverAt(j);
       const nextTurnIdx = findNextManeuverIndex(j);
       const dist = nextTurnIdx > j ? Math.round(calculateDistance(p, fullRoute[nextTurnIdx])) : 0;
 
@@ -194,13 +219,9 @@ document.getElementById('btnSendRoute').addEventListener('click', async () => {
     const msg = JSON.stringify(batch);
     await writeChar.writeValue(enc.encode(msg));
     progressEl.innerText = `Đã gửi ${Math.min(i + BATCH_SIZE, total)}/${total} (${Math.round(Math.min(i + BATCH_SIZE, total) / total * 100)}%)`;
-    await new Promise(r => setTimeout(r, 80));
+    await new Promise(r => setTimeout(r, 80)); // delay giữa các batch
   }
 
   log('Đã gửi toàn bộ dữ liệu (dạng batch)');
   progressEl.innerText = 'Hoàn tất!';
 });
-</script>
-</body>
-</html>
-
