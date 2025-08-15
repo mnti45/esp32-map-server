@@ -1,43 +1,63 @@
 <!DOCTYPE html>
 <html lang="vi">
 <head>
-<meta charset="utf-8"/>
-<title>OSM Navigation + BLE + GPX</title>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
-<style>
-body { font-family: Arial; margin: 0; display: flex; flex-direction: column; height: 100vh; }
-#map { flex: 1; }
-#controls { padding: 10px; background: #f4f4f4; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; border-top: 1px solid #ccc; }
-input[type="text"] { padding: 6px; width: 260px }
-button { padding: 6px 10px }
-#log { height: 160px; overflow: auto; background: #fff; border-top: 1px solid #ddd; font-size: 13px; padding: 8px; }
-#progress { margin-left: 10px; color: green; font-weight: bold; }
-</style>
+  <meta charset="utf-8"/>
+  <title>OSM Navigation + BLE</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+  <style>
+    body { font-family: Arial; margin: 0; display: flex; flex-direction: column; height: 100vh; }
+    #map { flex: 1; }
+    #controls {
+      padding: 10px;
+      background: #f4f4f4;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      border-top: 1px solid #ccc;
+    }
+    input[type="text"] { padding: 6px; width: 260px }
+    button { padding: 6px 10px }
+    #log {
+      height: 160px;
+      overflow: auto;
+      background: #fff;
+      border-top: 1px solid #ddd;
+      font-size: 13px;
+      padding: 8px;
+    }
+    #progress {
+      margin-left: 10px;
+      color: green;
+      font-weight: bold;
+    }
+  </style>
 </head>
 <body>
+
 <div id="map"></div>
+
 <div id="controls">
   <div>
-    <strong>Điểm đến:</strong> 
-    <input id="destInput" type="text" placeholder="Nhập địa chỉ (ví dụ: Bến Thành)" /> 
+    <strong>Điểm đến:</strong>
+    <input id="destInput" type="text" placeholder="Nhập địa chỉ (ví dụ: Bến Thành)" />
     <button id="btnRoute">Tính đường</button>
   </div>
+
   <div>
     <button id="btnScan">🔍 Quét BLE</button>
     <select id="deviceList" style="min-width:220px"></select>
     <button id="btnConnect">Kết nối</button>
     <button id="btnDisconnect">Ngắt</button>
   </div>
+
   <div>
     <button id="btnSendRoute">⬇ Gửi dữ liệu Route</button>
     <span id="progress">Chưa gửi</span>
   </div>
-  <div>
-    <input type="file" id="gpxFile" accept=".gpx" style="display:none"/>
-    <button id="btnLoadGPX">📂 Tải GPX</button>
-  </div>
 </div>
+
 <div id="log"></div>
 
 <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
@@ -46,7 +66,9 @@ const SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
 const CHAR_UUID = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
 
 const map = L.map('map').setView([10.762622, 106.660172], 13);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap contributors' }).addTo(map);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© OpenStreetMap contributors'
+}).addTo(map);
 
 let routeLine = null;
 let knownDevices = {}, connectedDevice = null, gattServer = null, writeChar = null;
@@ -54,20 +76,21 @@ let fullRoute = [], fullManeuvers = [];
 
 const logEl = document.getElementById('log');
 function log(...args) {
-  const line = args.map(a => typeof a==='object'?JSON.stringify(a):String(a)).join(' ');
-  logEl.innerText = new Date().toLocaleTimeString() + ' ' + line + '\n' + logEl.innerText;
+  const line = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
+  logEl.innerText = new Date().toLocaleTimeString() + '  ' + line + '\n' + logEl.innerText;
 }
 
-// BLE
 document.getElementById('btnScan').addEventListener('click', async () => {
   try {
     const device = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: [SERVICE_UUID] });
     knownDevices[device.id] = device;
-    const opt = new Option(device.name || `Device ${device.id.slice(0,6)}`, device.id);
+    const opt = new Option(device.name || `Device ${device.id.slice(0, 6)}`, device.id);
     document.getElementById('deviceList').appendChild(opt);
     document.getElementById('deviceList').value = device.id;
     log('Đã thêm thiết bị:', device.name || device.id);
-  } catch (err) { log('Lỗi quét BLE:', err); }
+  } catch (err) {
+    log('Lỗi quét BLE:', err);
+  }
 });
 
 document.getElementById('btnConnect').addEventListener('click', async () => {
@@ -80,7 +103,9 @@ document.getElementById('btnConnect').addEventListener('click', async () => {
     writeChar = await service.getCharacteristic(CHAR_UUID);
     connectedDevice = device;
     log('Đã kết nối BLE');
-  } catch (err) { log('Lỗi kết nối:', err); }
+  } catch (err) {
+    log('Lỗi kết nối:', err);
+  }
 });
 
 document.getElementById('btnDisconnect').addEventListener('click', () => {
@@ -90,108 +115,121 @@ document.getElementById('btnDisconnect').addEventListener('click', () => {
   }
 });
 
-function removeAccent(str) { return str.normalize("NFD").replace(/[\u0300-\u036f]/g, ""); }
+function removeAccent(str) {
+  return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
 
 async function geocode(q) {
   const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}`);
   const js = await res.json();
-  return js.length ? { lat:+js[0].lat, lon:+js[0].lon } : null;
+  return js.length ? { lat: +js[0].lat, lon: +js[0].lon } : null;
 }
 
 async function computeRoute(lat0, lon0, lat1, lon1) {
-  const url = `https://router.project-osrm.org/route/v1/driving/${lon0},${lat0};${lon1},${lat1}?overview=full&geometries=geojson&steps=true`;
+  const url = `https://router.project-osrm.org/route/v1/cycling/${lon0},${lat0};${lon1},${lat1}?overview=full&geometries=geojson&steps=true`;
   const res = await fetch(url);
   const data = await res.json();
   return data.routes[0];
 }
 
-// Tính đường từ địa chỉ
 document.getElementById('btnRoute').addEventListener('click', async () => {
   const destText = document.getElementById('destInput').value.trim();
   if (!destText) return alert('Nhập địa điểm');
-  const pos = await new Promise((res, rej) => navigator.geolocation.getCurrentPosition(res, rej, { enableHighAccuracy:true, timeout:10000, maximumAge:0 }));
+
+  const pos = await new Promise((res, rej) =>
+    navigator.geolocation.getCurrentPosition(res, rej, {
+      enableHighAccuracy: true,
+      timeout: 10000,
+      maximumAge: 0
+    })
+  );
+
   const { latitude, longitude } = pos.coords;
   const dest = await geocode(destText);
   if (!dest) return alert('Không tìm thấy địa chỉ này');
+
   const route = await computeRoute(latitude, longitude, dest.lat, dest.lon);
   if (!route) return alert('Không tính được lộ trình');
-  fullRoute = route.geometry.coordinates.map(c=>({lat:c[1],lon:c[0]}));
+
+  fullRoute = route.geometry.coordinates.map(c => ({ lat: c[1], lon: c[0] }));
   fullManeuvers = (route.legs[0]?.steps || []).map(s => ({
     lat: s.maneuver.location[1],
     lon: s.maneuver.location[0],
     modifier: s.maneuver.modifier || 'straight',
-    name: removeAccent(s.name||''),
-    next: removeAccent(s.destinations||'')
+    name: removeAccent(s.name || ''),
+    next: removeAccent(s.destinations || '')
   }));
-  if(routeLine) map.removeLayer(routeLine);
-  routeLine = L.polyline(fullRoute.map(p=>[p.lat,p.lon]), { color:'blue' }).addTo(map);
+
+  if (routeLine) map.removeLayer(routeLine);
+  routeLine = L.polyline(fullRoute.map(p => [p.lat, p.lon]), { color: 'blue' }).addTo(map);
   map.fitBounds(routeLine.getBounds());
-  log('Tính đường xong:', fullRoute.length,'tọa độ -', fullManeuvers.length,'maneuver');
+  log('Tính đường xong:', fullRoute.length, 'tọa độ -', fullManeuvers.length, 'maneuver');
 });
 
-// Tính quãng đường
-function calculateDistance(a,b){const R=6371000;const dLat=(b.lat-a.lat)*Math.PI/180;const dLon=(b.lon-a.lon)*Math.PI/180;const lat1=a.lat*Math.PI/180;const lat2=b.lat*Math.PI/180;const ua=Math.sin(dLat/2)**2+Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLon/2)**2;const c=2*Math.atan2(Math.sqrt(ua),Math.sqrt(1-ua));return R*c;}
-function findNextManeuverIndex(fromIndex=0){for(let i=fromIndex;i<fullRoute.length;i++){const match=matchManeuverAt(i);if(match&&match.modifier!=='straight') return i;} return -1;}
-function matchManeuverAt(index){const p=fullRoute[index];return fullManeuvers.find(m=>Math.abs(m.lat-p.lat)<1e-5&&Math.abs(m.lon-p.lon)<1e-5);}
+function calculateDistance(a, b) {
+  const R = 6371000;
+  const dLat = (b.lat - a.lat) * Math.PI / 180;
+  const dLon = (b.lon - a.lon) * Math.PI / 180;
+  const lat1 = a.lat * Math.PI / 180;
+  const lat2 = b.lat * Math.PI / 180;
 
-// Gửi route qua BLE
+  const ua = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(ua), Math.sqrt(1 - ua));
+  return R * c;
+}
+
+function findNextManeuverIndex(fromIndex = 0) {
+  for (let i = fromIndex; i < fullRoute.length; i++) {
+    const match = matchManeuverAt(i);
+    if (match && match.modifier !== 'straight') return i;
+  }
+  return -1;
+}
+
+function matchManeuverAt(index) {
+  const p = fullRoute[index];
+  return fullManeuvers.find(m =>
+    Math.abs(m.lat - p.lat) < 1e-5 && Math.abs(m.lon - p.lon) < 1e-5
+  );
+}
+
 document.getElementById('btnSendRoute').addEventListener('click', async () => {
-  if(!writeChar||!connectedDevice) return alert('Chưa kết nối BLE');
+  if (!writeChar || !connectedDevice) return alert('Chưa kết nối BLE');
+
   const BATCH_SIZE = 5;
   const enc = new TextEncoder();
   const progressEl = document.getElementById('progress');
   const total = fullRoute.length;
-  for(let i=0;i<total;i+=BATCH_SIZE){
-    const batch=[];
-    for(let j=i;j<i+BATCH_SIZE&&j<total;j++){
-      const p=fullRoute[j];
-      const m=matchManeuverAt(j);
-      const nextTurnIdx=findNextManeuverIndex(j);
-      const dist=nextTurnIdx>j?Math.round(calculateDistance(p,fullRoute[nextTurnIdx])):0;
-      batch.push({lat:p.lat,lon:p.lon,action:m?m.modifier:'none',road:m?m.name:'',next:m?m.next:'',dist:dist});
+
+  for (let i = 0; i < total; i += BATCH_SIZE) {
+    const batch = [];
+
+    for (let j = i; j < i + BATCH_SIZE && j < total; j++) {
+      const p = fullRoute[j];
+      const m = matchManeuverAt(j);
+      const nextTurnIdx = findNextManeuverIndex(j);
+      const dist = nextTurnIdx > j ? Math.round(calculateDistance(p, fullRoute[nextTurnIdx])) : 0;
+
+      batch.push({
+        lat: p.lat,
+        lon: p.lon,
+        action: m ? m.modifier : 'none',
+        road: m ? m.name : '',
+        next: m ? m.next : '',
+        dist: dist
+      });
     }
+
     const msg = JSON.stringify(batch);
     await writeChar.writeValue(enc.encode(msg));
-    progressEl.innerText = `Đã gửi ${Math.min(i+BATCH_SIZE,total)}/${total} (${Math.round(Math.min(i+BATCH_SIZE,total)/total*100)}%)`;
-    await new Promise(r=>setTimeout(r,80));
+    progressEl.innerText = `Đã gửi ${Math.min(i + BATCH_SIZE, total)}/${total} (${Math.round(Math.min(i + BATCH_SIZE, total) / total * 100)}%)`;
+    await new Promise(r => setTimeout(r, 80));
   }
+
   log('Đã gửi toàn bộ dữ liệu (dạng batch)');
   progressEl.innerText = 'Hoàn tất!';
-});
-
-// --- Xử lý GPX ---
-document.getElementById('btnLoadGPX').addEventListener('click', () => document.getElementById('gpxFile').click());
-
-document.getElementById('gpxFile').addEventListener('change', async (evt) => {
-  const file = evt.target.files[0];
-  if(!file) return;
-  const text = await file.text();
-  const parser = new DOMParser();
-  const xml = parser.parseFromString(text,"application/xml");
-  const pts = Array.from(xml.querySelectorAll('trkpt,rtept')).map(p=>({
-    lat: parseFloat(p.getAttribute('lat')),
-    lon: parseFloat(p.getAttribute('lon'))
-  }));
-  if(!pts.length) return alert('Không tìm thấy điểm nào trong GPX');
-  // gọi OSRM nhiều via points
-  const viaStr = pts.map(p=>`${p.lon},${p.lat}`).join(';');
-  const url = `https://router.project-osrm.org/route/v1/driving/${viaStr}?overview=full&geometries=geojson&steps=true`;
-  const res = await fetch(url);
-  const data = await res.json();
-  const route = data.routes[0];
-  fullRoute = route.geometry.coordinates.map(c=>({lat:c[1],lon:c[0]}));
-  fullManeuvers = (route.legs[0]?.steps || []).map(s => ({
-    lat: s.maneuver.location[1],
-    lon: s.maneuver.location[0],
-    modifier: s.maneuver.modifier || 'straight',
-    name: removeAccent(s.name||''),
-    next: removeAccent(s.destinations||'')
-  }));
-  if(routeLine) map.removeLayer(routeLine);
-  routeLine = L.polyline(fullRoute.map(p=>[p.lat,p.lon]), { color:'green' }).addTo(map);
-  map.fitBounds(routeLine.getBounds());
-  log(`GPX đã load: ${fullRoute.length} tọa độ, ${fullManeuvers.length} maneuver`);
 });
 </script>
 </body>
 </html>
+
