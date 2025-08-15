@@ -1,234 +1,146 @@
 <!DOCTYPE html>
 <html lang="vi">
 <head>
-  <meta charset="utf-8"/>
-  <title>OSM Navigation + BLE</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
-  <style>
-    body { font-family: Arial; margin: 0; display: flex; flex-direction: column; height: 100vh; }
-    #map { flex: 1; }
-    #controls {
-      padding: 10px;
-      background: #f4f4f4;
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-      align-items: center;
-      border-top: 1px solid #ccc;
-    }
-    input[type="text"] { padding: 6px; width: 260px }
-    button { padding: 6px 10px }
-    #log {
-      height: 160px;
-      overflow: auto;
-      background: #fff;
-      border-top: 1px solid #ddd;
-      font-size: 13px;
-      padding: 8px;
-    }
-    #progress {
-      margin-left: 10px;
-      color: green;
-      font-weight: bold;
-    }
-  </style>
+<meta charset="UTF-8">
+<title>Bản đồ OSRM + GPX</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+<style>
+  #map { height: 80vh; }
+  #controls { padding: 10px; background: #f0f0f0; }
+  button, input[type=file] { margin: 5px; }
+</style>
 </head>
 <body>
 
-<div id="map"></div>
-
 <div id="controls">
-  <div>
-    <strong>Điểm đến:</strong>
-    <input id="destInput" type="text" placeholder="Nhập địa chỉ (ví dụ: Bến Thành)" />
-    <button id="btnRoute">Tính đường</button>
-  </div>
+  <input type="text" id="start" placeholder="Điểm xuất phát"/>
+  <input type="text" id="end" placeholder="Điểm đến"/>
+  <button id="btnRoute">🚗 Tính đường</button>
 
-  <div>
-    <button id="btnScan">🔍 Quét BLE</button>
-    <select id="deviceList" style="min-width:220px"></select>
-    <button id="btnConnect">Kết nối</button>
-    <button id="btnDisconnect">Ngắt</button>
-  </div>
-
-  <div>
-    <button id="btnSendRoute">⬇ Gửi dữ liệu Route</button>
-    <span id="progress">Chưa gửi</span>
-  </div>
+  <input type="file" id="gpxFile" accept=".gpx" />
+  <button id="btnLoadGPX">📂 Nạp GPX</button>
 </div>
 
-<div id="log"></div>
+<div id="map"></div>
+
+<pre id="log" style="padding:10px;background:#eee;height:15vh;overflow:auto;"></pre>
 
 <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 <script>
-const SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
-const CHAR_UUID = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
-
-const map = L.map('map').setView([10.762622, 106.660172], 13);
+let map = L.map('map').setView([10.762622, 106.660172], 13);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  attribution: '© OpenStreetMap contributors'
+  attribution: '&copy; OSM contributors'
 }).addTo(map);
 
 let routeLine = null;
-let knownDevices = {}, connectedDevice = null, gattServer = null, writeChar = null;
-let fullRoute = [], fullManeuvers = [];
+let fullRoute = [];
+let fullManeuvers = [];
 
-const logEl = document.getElementById('log');
-function log(...args) {
-  const line = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
-  logEl.innerText = new Date().toLocaleTimeString() + '  ' + line + '\n' + logEl.innerText;
+// Ghi log ra màn hình
+function log(msg) {
+  document.getElementById('log').textContent += msg + "\n";
 }
 
-document.getElementById('btnScan').addEventListener('click', async () => {
-  try {
-    const device = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: [SERVICE_UUID] });
-    knownDevices[device.id] = device;
-    const opt = new Option(device.name || `Device ${device.id.slice(0, 6)}`, device.id);
-    document.getElementById('deviceList').appendChild(opt);
-    document.getElementById('deviceList').value = device.id;
-    log('Đã thêm thiết bị:', device.name || device.id);
-  } catch (err) {
-    log('Lỗi quét BLE:', err);
-  }
-});
-
-document.getElementById('btnConnect').addEventListener('click', async () => {
-  const id = document.getElementById('deviceList').value;
-  const device = knownDevices[id];
-  if (!device) return alert('Chưa chọn thiết bị');
-  try {
-    gattServer = await device.gatt.connect();
-    const service = await gattServer.getPrimaryService(SERVICE_UUID);
-    writeChar = await service.getCharacteristic(CHAR_UUID);
-    connectedDevice = device;
-    log('Đã kết nối BLE');
-  } catch (err) {
-    log('Lỗi kết nối:', err);
-  }
-});
-
-document.getElementById('btnDisconnect').addEventListener('click', () => {
-  if (connectedDevice && connectedDevice.gatt.connected) {
-    connectedDevice.gatt.disconnect();
-    log('Đã ngắt kết nối');
-  }
-});
-
+// Hàm bỏ dấu tiếng Việt
 function removeAccent(str) {
   return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 
-async function geocode(q) {
-  const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}`);
-  const js = await res.json();
-  return js.length ? { lat: +js[0].lat, lon: +js[0].lon } : null;
-}
+// Tính đường bằng OSRM
+document.getElementById('btnRoute').addEventListener('click', async () => {
+  // Nếu đã có GPX, vẽ lại từ GPX
+  if (fullRoute.length > 0) {
+    log("📂 Đang dùng dữ liệu GPX (không gọi OSRM)");
+    if (routeLine) map.removeLayer(routeLine);
+    routeLine = L.polyline(fullRoute.map(p => [p.lat, p.lon]), { color: 'green' }).addTo(map);
+    map.fitBounds(routeLine.getBounds());
+    return;
+  }
 
-async function computeRoute(lat0, lon0, lat1, lon1) {
-  const url = `https://router.project-osrm.org/route/v1/driving/${lon0},${lat0};${lon1},${lat1}?overview=full&geometries=geojson&steps=true`;
+  const start = document.getElementById('start').value;
+  const end = document.getElementById('end').value;
+  if (!start || !end) return alert('Nhập đủ điểm xuất phát và điểm đến');
+
+  log("🚗 Đang gọi OSRM để tính đường...");
+  const url = `https://router.project-osrm.org/route/v1/driving/${start};${end}?overview=full&geometries=geojson`;
   const res = await fetch(url);
   const data = await res.json();
-  return data.routes[0];
-}
 
-document.getElementById('btnRoute').addEventListener('click', async () => {
-  const destText = document.getElementById('destInput').value.trim();
-  if (!destText) return alert('Nhập địa điểm');
+  if (data.routes && data.routes.length > 0) {
+    const coords = data.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
+    if (routeLine) map.removeLayer(routeLine);
+    routeLine = L.polyline(coords, { color: 'blue' }).addTo(map);
+    map.fitBounds(routeLine.getBounds());
+    log("✅ Đã vẽ tuyến đường bằng OSRM");
+  } else {
+    log("❌ Không tìm thấy tuyến đường");
+  }
+});
 
-  const pos = await new Promise((res, rej) =>
-    navigator.geolocation.getCurrentPosition(res, rej, {
-      enableHighAccuracy: true,
-      timeout: 10000,
-      maximumAge: 0
-    })
-  );
+// Nút nạp GPX
+document.getElementById('btnLoadGPX').addEventListener('click', async () => {
+  const fileInput = document.getElementById('gpxFile');
+  if (!fileInput.files.length) return alert('Chọn file GPX trước');
 
-  const { latitude, longitude } = pos.coords;
-  const dest = await geocode(destText);
-  if (!dest) return alert('Không tìm thấy địa chỉ này');
+  const file = fileInput.files[0];
+  const text = await file.text();
+  parseGPX(text);
+});
 
-  const route = await computeRoute(latitude, longitude, dest.lat, dest.lon);
-  if (!route) return alert('Không tính được lộ trình');
+// Hàm đọc & parse file GPX
+function parseGPX(gpxText) {
+  const parser = new DOMParser();
+  const xml = parser.parseFromString(gpxText, "application/xml");
 
-  fullRoute = route.geometry.coordinates.map(c => ({ lat: c[1], lon: c[0] }));
-  fullManeuvers = (route.legs[0]?.steps || []).map(s => ({
-    lat: s.maneuver.location[1],
-    lon: s.maneuver.location[0],
-    modifier: s.maneuver.modifier || 'straight',
-    name: removeAccent(s.name || ''),
-    next: removeAccent(s.destinations || '')
-  }));
+  fullRoute = [];
+  fullManeuvers = [];
+
+  // Lấy track points (<trkpt>)
+  const trkpts = xml.getElementsByTagName("trkpt");
+  for (let pt of trkpts) {
+    const lat = parseFloat(pt.getAttribute("lat"));
+    const lon = parseFloat(pt.getAttribute("lon"));
+    fullRoute.push({ lat, lon });
+  }
+
+  // Lấy route points (<rtept>)
+  const rtepts = xml.getElementsByTagName("rtept");
+  for (let pt of rtepts) {
+    const lat = parseFloat(pt.getAttribute("lat"));
+    const lon = parseFloat(pt.getAttribute("lon"));
+    let name = "";
+    let desc = "";
+    if (pt.getElementsByTagName("name")[0]) name = pt.getElementsByTagName("name")[0].textContent;
+    if (pt.getElementsByTagName("desc")[0]) desc = pt.getElementsByTagName("desc")[0].textContent;
+
+    fullManeuvers.push({
+      lat, lon,
+      modifier: name || 'straight',
+      name: removeAccent(desc || ''),
+      next: ''
+    });
+  }
+
+  if (fullRoute.length === 0 && fullManeuvers.length > 0) {
+    fullRoute = fullManeuvers.map(m => ({ lat: m.lat, lon: m.lon }));
+  }
+
+  if (fullRoute.length === 0) {
+    alert("Không tìm thấy dữ liệu tọa độ trong file GPX");
+    return;
+  }
 
   if (routeLine) map.removeLayer(routeLine);
-  routeLine = L.polyline(fullRoute.map(p => [p.lat, p.lon]), { color: 'blue' }).addTo(map);
+  routeLine = L.polyline(fullRoute.map(p => [p.lat, p.lon]), { color: 'green' }).addTo(map);
   map.fitBounds(routeLine.getBounds());
-  log('Tính đường xong:', fullRoute.length, 'tọa độ -', fullManeuvers.length, 'maneuver');
-});
 
-function calculateDistance(a, b) {
-  const R = 6371000;
-  const dLat = (b.lat - a.lat) * Math.PI / 180;
-  const dLon = (b.lon - a.lon) * Math.PI / 180;
-  const lat1 = a.lat * Math.PI / 180;
-  const lat2 = b.lat * Math.PI / 180;
-
-  const ua = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
-  const c = 2 * Math.atan2(Math.sqrt(ua), Math.sqrt(1 - ua));
-  return R * c;
+  log(`✅ Đã nạp GPX: ${fullRoute.length} điểm, ${fullManeuvers.length} bước điều hướng`);
 }
 
-function findNextManeuverIndex(fromIndex = 0) {
-  for (let i = fromIndex; i < fullRoute.length; i++) {
-    const match = matchManeuverAt(i);
-    if (match && match.modifier !== 'straight') return i;
-  }
-  return -1;
-}
+// Nếu nhập điểm mới thì xóa GPX để OSRM hoạt động
+document.getElementById('start').addEventListener('input', () => { fullRoute = []; });
+document.getElementById('end').addEventListener('input', () => { fullRoute = []; });
 
-function matchManeuverAt(index) {
-  const p = fullRoute[index];
-  return fullManeuvers.find(m =>
-    Math.abs(m.lat - p.lat) < 1e-5 && Math.abs(m.lon - p.lon) < 1e-5
-  );
-}
-
-document.getElementById('btnSendRoute').addEventListener('click', async () => {
-  if (!writeChar || !connectedDevice) return alert('Chưa kết nối BLE');
-
-  const BATCH_SIZE = 5;
-  const enc = new TextEncoder();
-  const progressEl = document.getElementById('progress');
-  const total = fullRoute.length;
-
-  for (let i = 0; i < total; i += BATCH_SIZE) {
-    const batch = [];
-
-    for (let j = i; j < i + BATCH_SIZE && j < total; j++) {
-      const p = fullRoute[j];
-      const m = matchManeuverAt(j);
-      const nextTurnIdx = findNextManeuverIndex(j);
-      const dist = nextTurnIdx > j ? Math.round(calculateDistance(p, fullRoute[nextTurnIdx])) : 0;
-
-      batch.push({
-        lat: p.lat,
-        lon: p.lon,
-        action: m ? m.modifier : 'none',
-        road: m ? m.name : '',
-        next: m ? m.next : '',
-        dist: dist
-      });
-    }
-
-    const msg = JSON.stringify(batch);
-    await writeChar.writeValue(enc.encode(msg));
-    progressEl.innerText = `Đã gửi ${Math.min(i + BATCH_SIZE, total)}/${total} (${Math.round(Math.min(i + BATCH_SIZE, total) / total * 100)}%)`;
-    await new Promise(r => setTimeout(r, 80));
-  }
-
-  log('Đã gửi toàn bộ dữ liệu (dạng batch)');
-  progressEl.innerText = 'Hoàn tất!';
-});
 </script>
 </body>
 </html>
