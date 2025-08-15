@@ -44,8 +44,8 @@ let bleDevice = null;
 let bleCharacteristic = null;
 
 // BLE UUIDs (cần thay bằng UUID ESP32 bạn dùng)
-const SERVICE_UUID = '0000ffe0-0000-1000-8000-00805f9b34fb';
-const CHARACTERISTIC_UUID = '0000ffe1-0000-1000-8000-00805f9b34fb';
+const serviceUUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+const characteristicUUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
 
 function log(msg) {
   document.getElementById('log').textContent += msg + "\n";
@@ -201,4 +201,5 @@ document.getElementById('btnSendBLE').addEventListener('click', async () => {
 </script>
 </body>
 </html>
+
 
