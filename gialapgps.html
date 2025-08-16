@@ -274,7 +274,7 @@ document.getElementById('btnSendRoute').addEventListener('click', async () => {
 
   const enc = new TextEncoder();
   const jsonStr = JSON.stringify(payload);
-  const enc = new TextEncoder();
+ 
 const data = enc.encode(jsonStr);
 const CHUNK_SIZE = 100; // hoặc 128 hoặc 20 tùy ESP32 bạn thử
 for (let i = 0; i < data.length; i += CHUNK_SIZE) {
@@ -294,6 +294,7 @@ await writeChar.writeValue(enc.encode('###END###'));
 </script>
 </body>
 </html>
+
 
 
 
