@@ -274,7 +274,18 @@ document.getElementById('btnSendRoute').addEventListener('click', async () => {
 
   const enc = new TextEncoder();
   const jsonStr = JSON.stringify(payload);
-  await writeChar.writeValue(enc.encode(jsonStr));
+  const enc = new TextEncoder();
+const data = enc.encode(jsonStr);
+const CHUNK_SIZE = 100; // hoặc 128 hoặc 20 tùy ESP32 bạn thử
+for (let i = 0; i < data.length; i += CHUNK_SIZE) {
+  const chunk = data.slice(i, i + CHUNK_SIZE);
+  await writeChar.writeValue(chunk);
+  await new Promise(resolve => setTimeout(resolve, 30)); // delay nhẹ để ESP32 xử lý
+}
+
+// Gửi 1 gói kết thúc để ESP32 biết đã xong
+await writeChar.writeValue(enc.encode('###END###'));
+
 
   document.getElementById('sentData').value = jsonStr;
   document.getElementById('progress').innerText = "Đã gửi toàn bộ dữ liệu";
@@ -283,5 +294,6 @@ document.getElementById('btnSendRoute').addEventListener('click', async () => {
 </script>
 </body>
 </html>
+
 
 
