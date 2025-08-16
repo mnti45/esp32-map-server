@@ -6,8 +6,24 @@
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
   <style>
-    body { font-family: Arial; margin: 0; display: flex; flex-direction: column; height: 100vh; }
-    #map { flex: 1; }
+    body {
+      font-family: Arial;
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+    #log {
+      height: 140px;
+      overflow: auto;
+      background: #fff;
+      border-bottom: 1px solid #ddd;
+      font-size: 13px;
+      padding: 8px;
+    }
+    #map {
+      flex: 1;
+    }
     #controls {
       padding: 10px;
       background: #f4f4f4;
@@ -17,15 +33,12 @@
       align-items: center;
       border-top: 1px solid #ccc;
     }
-    input[type="text"] { padding: 6px; width: 260px }
-    button { padding: 6px 10px }
-    #log {
-      height: 160px;
-      overflow: auto;
-      background: #fff;
-      border-top: 1px solid #ddd;
-      font-size: 13px;
-      padding: 8px;
+    input[type="text"] {
+      padding: 6px;
+      width: 260px;
+    }
+    button {
+      padding: 6px 10px;
     }
     #progress {
       margin-left: 10px;
@@ -33,16 +46,16 @@
       font-weight: bold;
     }
     #sentDataContainer {
-      padding: 10px; 
-      background: #eef; 
+      padding: 10px;
+      background: #eef;
       font-size: 12px;
       max-height: 200px;
       overflow: auto;
       border-top: 1px solid #ccc;
     }
     #sentData {
-      width: 100%; 
-      height: 180px; 
+      width: 100%;
+      height: 180px;
       font-family: monospace;
       white-space: pre-wrap;
       overflow-wrap: break-word;
@@ -50,6 +63,8 @@
   </style>
 </head>
 <body>
+
+<div id="log"></div>
 
 <div id="map"></div>
 
@@ -72,8 +87,6 @@
     <span id="progress">Chưa gửi</span>
   </div>
 </div>
-
-<div id="log"></div>
 
 <div id="sentDataContainer">
   <strong>Dữ liệu đã gửi xuống ESP32:</strong><br/>
@@ -152,10 +165,69 @@ async function computeRoute(lat0, lon0, lat1, lon1) {
   return data.routes[0];
 }
 
+function calculateDistance(a, b) {
+  const R = 6371000;
+  const dLat = (b.lat - a.lat) * Math.PI / 180;
+  const dLon = (b.lon - a.lon) * Math.PI / 180;
+  const lat1 = a.lat * Math.PI / 180;
+  const lat2 = b.lat * Math.PI / 180;
+  const ua = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(ua), Math.sqrt(1 - ua));
+  return R * c;
+}
+
+function findNextManeuverIndex(fromIndex = 0) {
+  for (let i = fromIndex; i < fullRoute.length; i++) {
+    const match = matchManeuverAt(i);
+    if (match && match.modifier !== 'straight') return i;
+  }
+  return -1;
+}
+
+function matchManeuverAt(index) {
+  const p = fullRoute[index];
+  return fullManeuvers.find(m =>
+    Math.abs(m.lat - p.lat) < 1e-5 && Math.abs(m.lon - p.lon) < 1e-5
+  );
+}
+
+document.getElementById('btnRoute').addEventListener('click', async () => {
+  const destText = document.getElementById('destInput').value.trim();
+  if (!destText) return alert('Nhập địa điểm');
+
+  const pos = await new Promise((res, rej) =>
+    navigator.geolocation.getCurrentPosition(res, rej, {
+      enableHighAccuracy: true,
+      timeout: 10000,
+      maximumAge: 0
+    })
+  );
+
+  const { latitude, longitude } = pos.coords;
+  const dest = await geocode(destText);
+  if (!dest) return alert('Không tìm thấy địa chỉ này');
+
+  const route = await computeRoute(latitude, longitude, dest.lat, dest.lon);
+  if (!route) return alert('Không tính được lộ trình');
+
+  fullRoute = route.geometry.coordinates.map(c => ({ lat: c[1], lon: c[0] }));
+  fullManeuvers = (route.legs[0]?.steps || []).map(s => ({
+    lat: s.maneuver.location[1],
+    lon: s.maneuver.location[0],
+    modifier: s.maneuver.modifier || 'straight',
+    name: removeAccent(s.name || ''),
+    next: removeAccent(s.destinations || '')
+  }));
+
+  if (routeLine) map.removeLayer(routeLine);
+  routeLine = L.polyline(fullRoute.map(p => [p.lat, p.lon]), { color: 'blue' }).addTo(map);
+  map.fitBounds(routeLine.getBounds());
+  log('Tính đường xong:', fullRoute.length, 'tọa độ -', fullManeuvers.length, 'maneuver');
+});
+
 document.getElementById('btnSendRoute').addEventListener('click', async () => {
   if (!writeChar || !connectedDevice) return alert('Chưa kết nối BLE');
 
-  // Lấy tọa độ hiện tại
   const pos = await new Promise((res, rej) =>
     navigator.geolocation.getCurrentPosition(res, rej, {
       enableHighAccuracy: true,
@@ -166,7 +238,6 @@ document.getElementById('btnSendRoute').addEventListener('click', async () => {
 
   const { latitude, longitude } = pos.coords;
 
-  // Ghép dữ liệu gửi xuống ESP32
   const payload = {
     start: {
       lat: latitude,
@@ -191,21 +262,14 @@ document.getElementById('btnSendRoute').addEventListener('click', async () => {
     });
   }
 
-  // Gửi xuống ESP32
   const enc = new TextEncoder();
   const jsonStr = JSON.stringify(payload);
   await writeChar.writeValue(enc.encode(jsonStr));
 
-  // Cập nhật UI
   document.getElementById('sentData').value = jsonStr;
   document.getElementById('progress').innerText = "Đã gửi toàn bộ dữ liệu";
   log("Đã gửi toàn bộ route + tọa độ hiện tại");
- progressEl.innerText = 'Hoàn tất!';
 });
-
- 
 </script>
 </body>
 </html>
-
-
