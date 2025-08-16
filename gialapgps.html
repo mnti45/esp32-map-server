@@ -135,15 +135,6 @@ document.getElementById('btnScan').addEventListener('click', async () => {
   }
 });
 
-    knownDevices[device.id] = device;
-    const opt = new Option(device.name || `Device ${device.id.slice(0, 6)}`, device.id);
-    document.getElementById('deviceList').appendChild(opt);
-    document.getElementById('deviceList').value = device.id;
-    log('Đã thêm thiết bị:', device.name || device.id);
-  } catch (err) {
-    log('Lỗi quét BLE:', err);
-  }
-});
 
 document.getElementById('btnConnect').addEventListener('click', async () => {
   const id = document.getElementById('deviceList').value;
@@ -292,4 +283,5 @@ document.getElementById('btnSendRoute').addEventListener('click', async () => {
 </script>
 </body>
 </html>
+
 
