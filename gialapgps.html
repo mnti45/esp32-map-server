@@ -115,7 +115,26 @@ function log(...args) {
 
 document.getElementById('btnScan').addEventListener('click', async () => {
   try {
-    const device = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: [SERVICE_UUID] });
+    const device = await navigator.bluetooth.requestDevice({
+      filters: [{ name: 'ESP32-NAV' }],
+      optionalServices: [SERVICE_UUID]
+    });
+
+    knownDevices[device.id] = device;
+
+    // Xóa danh sách cũ và thêm thiết bị mới
+    const listEl = document.getElementById('deviceList');
+    listEl.innerHTML = ''; // xóa cũ
+    const opt = new Option(device.name || `Device ${device.id.slice(0, 6)}`, device.id);
+    listEl.appendChild(opt);
+    listEl.value = device.id;
+
+    log('Tìm thấy thiết bị ESP32-NAV:', device.name || device.id);
+  } catch (err) {
+    log('Không tìm thấy thiết bị ESP32-NAV hoặc bị từ chối:', err);
+  }
+});
+
     knownDevices[device.id] = device;
     const opt = new Option(device.name || `Device ${device.id.slice(0, 6)}`, device.id);
     document.getElementById('deviceList').appendChild(opt);
@@ -273,3 +292,4 @@ document.getElementById('btnSendRoute').addEventListener('click', async () => {
 </script>
 </body>
 </html>
+
