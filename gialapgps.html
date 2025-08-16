@@ -281,7 +281,12 @@ for (let i = 0; i < data.length; i += CHUNK_SIZE) {
   const chunk = data.slice(i, i + CHUNK_SIZE);
   await writeChar.writeValue(chunk);
   await new Promise(resolve => setTimeout(resolve, 30)); // delay nhẹ để ESP32 xử lý
+
+  // Tính phần trăm đã gửi
+  const percent = Math.min(100, Math.round((i + CHUNK_SIZE) * 100 / data.length));
+  document.getElementById('progress').innerText = `Đã gửi ${percent}%`;
 }
+
 
 // Gửi 1 gói kết thúc để ESP32 biết đã xong
 await writeChar.writeValue(enc.encode('###END###'));
@@ -294,6 +299,7 @@ await writeChar.writeValue(enc.encode('###END###'));
 </script>
 </body>
 </html>
+
 
 
 
