@@ -200,11 +200,12 @@ document.getElementById('btnSendRoute').addEventListener('click', async () => {
   document.getElementById('sentData').value = jsonStr;
   document.getElementById('progress').innerText = "Đã gửi toàn bộ dữ liệu";
   log("Đã gửi toàn bộ route + tọa độ hiện tại");
+ progressEl.innerText = 'Hoàn tất!';
 });
 
-  progressEl.innerText = 'Hoàn tất!';
-});
+ 
 </script>
 </body>
 </html>
+
 
