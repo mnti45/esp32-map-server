@@ -121,6 +121,45 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '© OpenStreetMap contributors'
 }).addTo(map);
 
+// ✅ Định vị liên tục + chính xác
+let currentPosition = null;
+let userMarker = null;
+
+navigator.geolocation.watchPosition(
+  (pos) => {
+    const lat = pos.coords.latitude;
+    const lon = pos.coords.longitude;
+
+    currentPosition = { lat, lon };
+
+    if (!userMarker) {
+      userMarker = L.marker([lat, lon], {
+        title: "Vị trí hiện tại",
+        icon: L.icon({
+          iconUrl: "https://maps.gstatic.com/mapfiles/ms2/micons/blue-dot.png",
+          iconSize: [24, 24],
+          iconAnchor: [12, 12]
+        })
+      }).addTo(map);
+      map.setView([lat, lon], 17); // Zoom đến vị trí đầu
+    } else {
+      userMarker.setLatLng([lat, lon]);
+    }
+
+    // 👉 Nếu muốn bản đồ luôn theo dõi bạn: bỏ dấu //
+    // map.panTo([lat, lon], { animate: true });
+  },
+  (err) => {
+    console.error("Không thể lấy vị trí:", err);
+    alert("⚠️ Không thể lấy vị trí. Hãy bật GPS và cấp quyền định vị cho trình duyệt.");
+  },
+  {
+    enableHighAccuracy: true,
+    maximumAge: 0,
+    timeout: 10000
+  }
+);
+
 let routeLine = null;
 let knownDevices = {}, connectedDevice = null, gattServer = null, writeChar = null;
 let fullRoute = [], fullManeuvers = [];
@@ -128,6 +167,9 @@ let fullRoute = [], fullManeuvers = [];
 function log(...args) {
   console.log(...args);
 }
+
+// ... (giữ nguyên toàn bộ các phần còn lại như `btnScan`, `btnConnect`, `btnRoute`, `btnSendRoute`, v.v.) ...
+
 
 document.getElementById('btnScan').addEventListener('click', async () => {
   try {
@@ -315,3 +357,4 @@ document.getElementById('copyBtn').addEventListener('click', async () => {
 </script>
 </body>
 </html>
+
