@@ -198,12 +198,12 @@ function selectRoute(index) {
 
   // Lưu dữ liệu route để gửi BLE (chuyển geojson coords sang [{lat, lon}])
   fullRoute = route.geometry.coordinates.map(coord => ({
-  lat: coord[1],
-  lon: coord[0],
-  action: "none",
-  road: "Unknown",
-  next: ""
-}));
+    lat: coord[1],
+    lon: coord[0],
+    action: "none",
+    road: "Unknown",
+    next: ""
+  }));
 
 }
 
@@ -315,143 +315,141 @@ function disconnectBLE() {
   updateDeviceList();
 }
 
-// --- Gửi dữ liệu route qua BLE ---
-// Gửi dữ liệu theo chunk 20 bytes, thêm delay 50ms để tránh bị mất gói
-async function sendRouteData() {
-  if (!writeChar || !fullRoute.length || !currentPositionMarker) {
-    alert('Chưa kết nối BLE hoặc chưa có dữ liệu tuyến đường hoặc vị trí hiện tại!');
+// --- Hàm tìm maneuver tại index dựa trên dữ liệu giả định hoặc logic thật ---
+function matchManeuverAt(index) {
+  // Giả sử bạn có data maneuvers tương ứng hoặc bạn muốn tạm thời trả về mặc định
+  // Nếu bạn có dữ liệu maneuvers chính xác, thay phần này thành logic lấy đúng maneuver
+  return {modifier: "straight", name: "Unknown Road", next: ""};
+}
+
+// --- Hàm tính khoảng cách (m) giữa 2 điểm lat-lon (haversine formula) ---
+function calculateDistance(p1, p2) {
+  const R = 6371000; // bán kính Trái Đất (m)
+  const toRad = deg => deg * Math.PI / 180;
+  const dLat = toRad(p2.lat - p1.lat);
+  const dLon = toRad(p2.lon - p1.lon);
+  const a = Math.sin(dLat/2)*Math.sin(dLat/2) +
+            Math.cos(toRad(p1.lat))*Math.cos(toRad(p2.lat)) *
+            Math.sin(dLon/2)*Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c;
+}
+
+// --- Tính đường khi bấm nút ---
+document.getElementById('btnRoute').addEventListener('click', async () => {
+  const destAddr = document.getElementById('destInput').value.trim();
+  if (!destAddr) {
+    alert('Nhập địa chỉ đích');
+    return;
+  }
+  if (!currentPositionMarker) {
+    alert('Chưa xác định vị trí hiện tại');
+    return;
+  }
+  const startLat = currentPositionMarker.getLatLng().lat;
+  const startLon = currentPositionMarker.getLatLng().lng;
+  const destPos = await geocode(destAddr);
+  if (!destPos) {
+    alert('Không tìm thấy địa chỉ đích');
     return;
   }
 
-  const start = {
-    lat: currentPositionMarker.getLatLng().lat,
-    lon: currentPositionMarker.getLatLng().lng
-  };
-  const payload = {
-  start: {
-    lat: currentPositionMarker.getLatLng().lat,
-    lon: currentPositionMarker.getLatLng().lng
-  },
-  route: fullRoute
-};
-const jsonString = JSON.stringify(payload);
+  const routes = await computeRoute(startLat, startLon, destPos.lat, destPos.lon);
+  if (!routes.length) {
+    alert('Không tìm thấy tuyến đường');
+    return;
+  }
+  routesData = routes;
 
-  console.log('Dữ liệu gửi:', jsonString);
+  const selectRouteElem = document.getElementById('routeSelect');
+  selectRouteElem.innerHTML = '';
+  routes.forEach((r, i) => {
+    const opt = document.createElement('option');
+    opt.value = i;
+    opt.text = `Tuyến ${i+1} - ${Math.round(r.distance/1000)} km, ${Math.round(r.duration/60)} phút`;
+    selectRouteElem.appendChild(opt);
+  });
+  selectRouteElem.selectedIndex = 0;
+  selectRoute(0);
+});
 
-  document.getElementById('sentData').value = jsonString;
+// --- Chọn tuyến đường khi thay đổi trong select ---
+document.getElementById('routeSelect').addEventListener('change', (e) => {
+  selectRoute(e.target.value);
+});
 
+// --- Gửi dữ liệu route qua BLE theo chunk 20 bytes ---
+async function sendRouteData() {
+  if (!writeChar || !fullRoute.length) {
+    alert('Chưa kết nối BLE hoặc chưa có route');
+    return;
+  }
+
+  // Tạo dữ liệu route dạng JSON
+  // fullRoute = [{lat, lon, action, road, next},...]
+  // Cắt thành chunk <= 20 bytes (vì BLE MTU 23 byte, dữ liệu thực 20)
+  // Ở đây sẽ chuyển dữ liệu sang chuỗi JSON thu gọn, rồi cắt
+  // Có thể tối ưu nhị phân nhưng đơn giản dùng text
+
+  // Bổ sung hành động theo maneuver
+  fullRoute.forEach((pt, idx) => {
+    const man = matchManeuverAt(idx);
+    pt.action = man.modifier || "none";
+    pt.road = man.name || "Unknown";
+    pt.next = man.next || "";
+  });
+
+  const jsonStr = JSON.stringify(fullRoute);
   const encoder = new TextEncoder();
-  const encoded = encoder.encode(jsonString);
+  const data = encoder.encode(jsonStr);
 
-  const CHUNK_SIZE = 20;
-  const endSignal = encoder.encode("###END###");
   const progressBar = document.getElementById('progressBar');
   const progressText = document.getElementById('progress');
+  const sentDataArea = document.getElementById('sentData');
 
   progressBar.value = 0;
-  progressBar.max = encoded.length + endSignal.length;
-  progressText.textContent = 'Đang gửi...';
+  progressBar.max = data.length;
+  progressText.textContent = 'Đang gửi dữ liệu...';
 
-  // Hàm delay đơn giản
-  const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+  sentDataArea.value = "";
 
   try {
     let offset = 0;
-    while (offset < encoded.length) {
-      const chunk = encoded.slice(offset, offset + CHUNK_SIZE);
+    const chunkSize = 20;
+    while (offset < data.length) {
+      const chunk = data.slice(offset, offset + chunkSize);
       await writeChar.writeValue(chunk);
-      offset += chunk.length;
+      offset += chunkSize;
       progressBar.value = offset;
-      await delay(50);
+      progressText.textContent = `Đã gửi ${offset} / ${data.length} bytes`;
+      // Cập nhật hiển thị text đã gửi
+      sentDataArea.value = jsonStr.slice(0, offset);
+      await new Promise(r => setTimeout(r, 30)); // tránh gửi nhanh quá
     }
-
-    // Gửi endSignal cũng chia chunk nhỏ
-    let endOffset = 0;
-    while (endOffset < endSignal.length) {
-      const chunk = endSignal.slice(endOffset, endOffset + CHUNK_SIZE);
-      await writeChar.writeValue(chunk);
-      endOffset += chunk.length;
-      progressBar.value = offset + endOffset;
-      await delay(50);
-    }
-
-    progressText.textContent = 'Gửi thành công!';
-  } catch (e) {
-    console.error('Lỗi gửi dữ liệu:', e);
-    progressText.textContent = 'Lỗi gửi!';
-    alert('Lỗi gửi dữ liệu: ' + e.message);
+    progressText.textContent = "Gửi dữ liệu hoàn thành!";
+  } catch (err) {
+    progressText.textContent = "Lỗi khi gửi dữ liệu: " + err.message;
   }
 }
 
-// --- COPY Dữ liệu đã gửi ---
+// --- Các nút bấm ---
+document.getElementById('btnScan').addEventListener('click', scanBLE);
+document.getElementById('btnConnect').addEventListener('click', connectBLE);
+document.getElementById('btnDisconnect').addEventListener('click', disconnectBLE);
+document.getElementById('btnSendRoute').addEventListener('click', sendRouteData);
+
+// --- Copy dữ liệu đã gửi ---
 document.getElementById('copyBtn').addEventListener('click', () => {
   const sentData = document.getElementById('sentData');
   sentData.select();
   document.execCommand('copy');
-  alert('Đã copy dữ liệu!');
+  alert('Đã sao chép dữ liệu đã gửi');
 });
 
-// --- Nút tính đường ---
-document.getElementById('btnRoute').addEventListener('click', async () => {
-  const destText = document.getElementById('destInput').value.trim();
-  if (!destText) {
-    alert('Vui lòng nhập điểm đến!');
-    return;
-  }
-  if (!currentPositionMarker) {
-    alert('Không có vị trí hiện tại!');
-    return;
-  }
+// --- Khởi tạo ---
+initMap();
 
-  const destCoord = await geocode(destText);
-  if (!destCoord) {
-    alert('Không tìm thấy địa chỉ!');
-    return;
-  }
-
-  const startLat = currentPositionMarker.getLatLng().lat;
-  const startLon = currentPositionMarker.getLatLng().lng;
-
-  const computedRoutes = await computeRoute(startLat, startLon, destCoord.lat, destCoord.lon);
-  if (!computedRoutes.length) {
-    alert('Không tìm thấy tuyến đường!');
-    return;
-  }
-
-  routesData = computedRoutes;
-
-  clearRoutes();
-
-  const select = document.getElementById('routeSelect');
-  select.innerHTML = '';
-  routesData.forEach((r, i) => {
-    const option = document.createElement('option');
-    option.value = i;
-    option.text = `Tuyến ${i + 1}: ${Math.round(r.distance / 1000)} km - ${Math.round(r.duration / 60)} phút`;
-    select.appendChild(option);
-  });
-
-  selectRoute(0);
-});
-
-// --- Chọn tuyến đường ---
-document.getElementById('routeSelect').addEventListener('change', e => {
-  const idx = Number(e.target.value);
-  selectRoute(idx);
-});
-
-// --- Nút quét, kết nối, ngắt ---
-document.getElementById('btnScan').addEventListener('click', scanBLE);
-document.getElementById('btnConnect').addEventListener('click', connectBLE);
-document.getElementById('btnDisconnect').addEventListener('click', disconnectBLE);
-
-// --- Nút gửi dữ liệu ---
-document.getElementById('btnSendRoute').addEventListener('click', sendRouteData);
-
-// --- Khởi tạo bản đồ khi load trang ---
-window.onload = initMap;
 </script>
+
 </body>
 </html>
-
-
