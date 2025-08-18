@@ -39,6 +39,7 @@
     #map {
       flex: 1 1 auto;
       height: auto;
+      min-height: 400px;
     }
     #controls {
       padding: 12px 10px;
@@ -140,14 +141,98 @@
 const SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
 const CHAR_UUID = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
 
-// (phần bản đồ và xử lý route giữ nguyên, không đổi)
-
+// Biến quản lý BLE
 let knownDevices = {};
 let connectedDevice = null;
 let gattServer = null;
 let writeChar = null;
 
-// --- Xử lý ngắt kết nối tự động ---
+// Biến quản lý bản đồ, route
+let map, currentPositionMarker = null, routeLayer = null;
+let routesData = [];
+let fullRoute = [];
+
+// --- Khởi tạo bản đồ Leaflet ---
+function initMap() {
+  map = L.map('map').setView([10.7769, 106.7009], 13); // trung tâm TP.HCM làm mặc định
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+  }).addTo(map);
+
+  // Lấy vị trí hiện tại
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(pos => {
+      const lat = pos.coords.latitude;
+      const lon = pos.coords.longitude;
+      currentPositionMarker = L.marker([lat, lon]).addTo(map).bindPopup("Vị trí hiện tại").openPopup();
+      map.setView([lat, lon], 14);
+    }, err => {
+      alert("Không lấy được vị trí hiện tại: " + err.message);
+    });
+  } else {
+    alert("Trình duyệt không hỗ trợ Geolocation");
+  }
+}
+
+// --- Xóa tuyến đường cũ ---
+function clearRoutes() {
+  if (routeLayer) {
+    map.removeLayer(routeLayer);
+    routeLayer = null;
+  }
+}
+
+// --- Hiển thị tuyến đã chọn ---
+function selectRoute(index) {
+  clearRoutes();
+  if (!routesData || !routesData[index]) return;
+
+  const route = routesData[index];
+  routeLayer = L.geoJSON(route.geometry, {
+    style: { color: 'blue', weight: 5 }
+  }).addTo(map);
+
+  // Zoom tới tuyến đường
+  map.fitBounds(routeLayer.getBounds());
+
+  // Lưu dữ liệu route để gửi BLE (chuyển geojson coords sang [{lat, lon}])
+  fullRoute = route.geometry.coordinates.map(coord => ({ lat: coord[1], lon: coord[0] }));
+}
+
+// --- Hàm gọi API định tuyến OSRM ---
+async function computeRoute(startLat, startLon, endLat, endLon) {
+  const url = `https://router.project-osrm.org/route/v1/driving/${startLon},${startLat};${endLon},${endLat}?overview=full&geometries=geojson`;
+  try {
+    const response = await fetch(url);
+    const data = await response.json();
+    if (data.code !== 'Ok' || !data.routes.length) return [];
+
+    return data.routes.map(route => ({
+      geometry: route.geometry,
+      distance: route.distance,
+      duration: route.duration
+    }));
+  } catch (e) {
+    console.error('Lỗi lấy tuyến:', e);
+    return [];
+  }
+}
+
+// --- Hàm geocode đơn giản qua Nominatim ---
+async function geocode(address) {
+  const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}`;
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+    if (!data.length) return null;
+    return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
+  } catch {
+    return null;
+  }
+}
+
+// --- BLE xử lý ngắt kết nối tự động ---
 function onDisconnected(event) {
   alert('Thiết bị đã ngắt kết nối');
   connectedDevice = null;
@@ -349,14 +434,8 @@ document.getElementById('btnDisconnect').addEventListener('click', disconnectBLE
 // --- Nút gửi dữ liệu ---
 document.getElementById('btnSendRoute').addEventListener('click', sendRouteData);
 
+// --- Khởi tạo bản đồ khi load trang ---
+window.onload = initMap;
 </script>
 </body>
 </html>
-
-
-
-
-
-
-
-
