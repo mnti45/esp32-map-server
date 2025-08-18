@@ -168,7 +168,7 @@ function onLocationError(e) {
   alert("Không thể lấy vị trí hiện tại: " + e.message);
 }
 
-map.locate({watch: true, setView: true, maxZoom: 16, enableHighAccuracy: true});
+//map.locate({watch: true, setView: true, maxZoom: 16, enableHighAccuracy: true});
 map.on('locationfound', onLocationFound);
 map.on('locationerror', onLocationError);
 
@@ -438,4 +438,5 @@ document.getElementById('btnDisconnect').addEventListener('click', disconnectBLE
 </script>
 </body>
 </html>
+
 
