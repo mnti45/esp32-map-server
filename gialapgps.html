@@ -370,13 +370,14 @@ document.getElementById('routeSelect').addEventListener('change', e => {
 async function scanBLE() {
   try {
     const device = await navigator.bluetooth.requestDevice({
-      filters: [{ services: [SERVICE_UUID] }],
-      optionalServices: [SERVICE_UUID]
+      filters: [{ name: 'ESP32-NAV' }],
+      optionalServices: [SERVICE_UUID]  // Quan trọng!!!
     });
     knownDevices[device.id] = device;
     updateDeviceList();
-  } catch (e) {
-    alert('Lỗi khi quét thiết bị BLE: ' + e.message);
+  } catch (error) {
+    console.error('Quét thiết bị BLE lỗi:', error);
+    alert('Quét BLE thất bại: ' + error.message);
   }
 }
 
@@ -441,6 +442,7 @@ document.getElementById('btnDisconnect').addEventListener('click', disconnectBLE
 </script>
 </body>
 </html>
+
 
 
 
