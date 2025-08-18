@@ -291,8 +291,12 @@ async function sendRouteData() {
   const progressBar = document.getElementById('progressBar');
   const progressText = document.getElementById('progress');
 
+  // Tính tổng độ dài bao gồm cả chuỗi kết thúc
+  const endSignal = encoder.encode("###END###");
+  const totalLength = encoded.length + endSignal.length;
+
   progressBar.value = 0;
-  progressBar.max = encoded.length;
+  progressBar.max = totalLength;
   progressText.textContent = 'Đang gửi...';
 
   try {
@@ -302,6 +306,11 @@ async function sendRouteData() {
       offset += chunk.length;
       progressBar.value = offset;
     }
+
+    // Gửi chuỗi kết thúc
+    await writeChar.writeValue(endSignal);
+    progressBar.value = totalLength;
+
     progressText.textContent = 'Gửi thành công!';
   } catch (e) {
     console.error('Lỗi gửi dữ liệu:', e);
@@ -442,6 +451,7 @@ document.getElementById('btnDisconnect').addEventListener('click', disconnectBLE
 </script>
 </body>
 </html>
+
 
 
 
