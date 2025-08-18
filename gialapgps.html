@@ -320,8 +320,7 @@ async function sendRouteData() {
     lat: currentPositionMarker.getLatLng().lat,
     lon: currentPositionMarker.getLatLng().lng
   };
-  const dataToSend = { start, route: fullRoute };
-  const jsonString = JSON.stringify(dataToSend);
+  const jsonString = JSON.stringify(fullRoute);
   console.log('Dữ liệu gửi:', jsonString);
 
   document.getElementById('sentData').value = jsonString;
@@ -439,3 +438,4 @@ window.onload = initMap;
 </script>
 </body>
 </html>
+
