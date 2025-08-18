@@ -144,18 +144,19 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '© OpenStreetMap contributors'
 }).addTo(map);
 
-let markers = [];
 let routeLines = [];
 let currentPositionMarker = null;
-let knownDevices = {}, connectedDevice = null, gattServer = null, writeChar = null;
+let knownDevices = {};
+let connectedDevice = null;
+let gattServer = null;
+let writeChar = null;
 
-let routesData = [];  // Mảng lưu nhiều tuyến đường (OSRM trả về)
+let routesData = [];  // Lưu nhiều tuyến đường (OSRM trả về)
 let fullRoute = [];   // route điểm rẽ để gửi
 
 // --- HIỂN THỊ VỊ TRÍ HIỆN TẠI LIÊN TỤC VÀ CHÍNH XÁC ---
 function onLocationFound(e) {
   const latlng = e.latlng;
-
   if (!currentPositionMarker) {
     currentPositionMarker = L.marker(latlng, {title: "Vị trí hiện tại"}).addTo(map);
   } else {
@@ -192,18 +193,6 @@ async function computeRoute(lat0, lon0, lat1, lon1) {
   return data.routes || [];
 }
 
-// --- TÍNH KHOẢNG CÁCH GIỮA 2 ĐIỂM ---
-function calculateDistance(a, b) {
-  const R = 6371000;
-  const dLat = (b.lat - a.lat) * Math.PI / 180;
-  const dLon = (b.lon - a.lon) * Math.PI / 180;
-  const lat1 = a.lat * Math.PI / 180;
-  const lat2 = b.lat * Math.PI / 180;
-  const ua = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
-  const c = 2 * Math.atan2(Math.sqrt(ua), Math.sqrt(1 - ua));
-  return R * c;
-}
-
 // --- TÌM ĐIỂM RẼ (MANEUVER) ---
 function findManeuvers(steps) {
   return steps.map(s => ({
@@ -215,16 +204,14 @@ function findManeuvers(steps) {
   }));
 }
 
-// --- LỌC CHỈ GỬI ĐIỂM RẼ (KO GỬI 'straight' ĐỂ GIẢM DỮ LIỆU) ---
+// --- LỌC CHỈ GỬI ĐIỂM RẼ ---
 function buildRouteData(leg) {
   const routePoints = [];
   const maneuvers = findManeuvers(leg.steps);
 
-  let nextTurnIndex = 0;
   for (let i = 0; i < leg.steps.length; i++) {
     const step = leg.steps[i];
     const man = maneuvers[i];
-    // push điểm rẽ + đoạn thẳng liền sau (cộng khoảng cách)
     routePoints.push({
       lat: man.lat,
       lon: man.lon,
@@ -252,294 +239,30 @@ function clearRoutes() {
   routeLines = [];
 }
 
-// --- XỬ LÝ KHI NGƯỜI CHỌN TUYẾN ĐƯỜNG ---
-function selectRoute(index) {
+// --- XỬ LÝ KHI NGƯỜI CHỌN TUYẾN ---
+function selectRoute(idx) {
+  if (idx < 0 || idx >= routesData.length) return;
   clearRoutes();
-  if (index < 0 || index >= routesData.length) return;
 
-  const route = routesData[index];
-  fullRoute = buildRouteData(route.legs[0]);  // Lấy leg đầu, giả định đi bộ 1 leg
-  drawRouteOnMap(fullRoute, 'blue');
-
-  // Hiển thị info tuyến trên select option
-  const opt = document.getElementById('routeSelect').options[index];
-  opt.text = `Tuyến ${index + 1}: ${Math.round(route.distance/1000)} km - ${Math.round(route.duration/60)} phút`;
-
-  // Chọn lại option (phòng lỗi)
-  document.getElementById('routeSelect').value = index;
-}
-<!DOCTYPE html>
-<html lang="vi">
-<head>
-  <meta charset="utf-8"/>
-  <title>OSM Navigation + BLE</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      margin: 0;
-      display: flex;
-      flex-direction: column;
-      height: 100vh;
-    }
-    #sentDataContainer {
-      padding: 8px 12px;
-      background: #eef6ff;
-      font-size: 12px;
-      max-height: 120px;
-      overflow: auto;
-      border-bottom: 1px solid #ccc;
-      flex-shrink: 0;
-    }
-    #sentData {
-      width: 100%;
-      height: 80px;
-      font-family: monospace;
-      white-space: pre-wrap;
-      overflow-wrap: break-word;
-      resize: none;
-    }
-    #copyBtn {
-      margin-top: 6px;
-      font-size: 12px;
-      padding: 4px 8px;
-      cursor: pointer;
-    }
-    #map {
-      flex: 1 1 auto;
-      height: auto;
-    }
-    #controls {
-      padding: 12px 10px;
-      background: #f9f9f9;
-      border-top: 1px solid #ccc;
-      display: flex;
-      flex-wrap: wrap;
-      gap: 12px;
-      justify-content: space-between;
-      align-items: center;
-      flex-shrink: 0;
-    }
-    #controls > div {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
-    input[type="text"] {
-      padding: 6px 8px;
-      width: 250px;
-      font-size: 14px;
-      border: 1px solid #ccc;
-      border-radius: 4px;
-    }
-    select {
-      padding: 6px 8px;
-      font-size: 14px;
-      border-radius: 4px;
-      border: 1px solid #ccc;
-      min-width: 220px;
-    }
-    button {
-      padding: 6px 12px;
-      font-size: 14px;
-      border-radius: 4px;
-      border: 1px solid #007bff;
-      background: #007bff;
-      color: white;
-      cursor: pointer;
-      transition: background-color 0.3s;
-    }
-    button:hover {
-      background: #0056b3;
-    }
-    #progress {
-      font-weight: 600;
-      color: green;
-      min-width: 130px;
-      text-align: center;
-    }
-    progress {
-      width: 200px;
-      height: 14px;
-      border-radius: 6px;
-      overflow: hidden;
-    }
-  </style>
-</head>
-<body>
-
-<div id="sentDataContainer">
-  <strong>Dữ liệu đã gửi xuống ESP32:</strong>
-  <textarea id="sentData" readonly></textarea>
-  <button id="copyBtn">📋 Copy dữ liệu</button>
-</div>
-
-<div id="map"></div>
-
-<div id="controls">
-  <div>
-    <strong>Điểm đến:</strong>
-    <input id="destInput" type="text" placeholder="Nhập địa chỉ (VD: Bến Thành)" />
-    <button id="btnRoute">Tính đường</button>
-  </div>
-
-  <div>
-    <button id="btnScan">🔍 Quét BLE</button>
-    <select id="deviceList" style="min-width:220px"></select>
-    <button id="btnConnect">Kết nối</button>
-    <button id="btnDisconnect">Ngắt</button>
-  </div>
-
-  <div>
-    <strong>Tuyến đường:</strong>
-    <select id="routeSelect" style="min-width:240px"></select>
-  </div>
-
-  <div>
-    <button id="btnSendRoute">⬇ Gửi dữ liệu Route</button>
-    <span id="progress">Chưa gửi</span>
-    <progress id="progressBar" value="0" max="100"></progress>
-  </div>
-</div>
-
-<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-<script>
-const SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
-const CHAR_UUID = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
-
-const map = L.map('map').setView([10.762622, 106.660172], 13);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  attribution: '© OpenStreetMap contributors'
-}).addTo(map);
-
-let markers = [];
-let routeLines = [];
-let currentPositionMarker = null;
-let knownDevices = {}, connectedDevice = null, gattServer = null, writeChar = null;
-
-let routesData = [];  // Mảng lưu nhiều tuyến đường (OSRM trả về)
-let fullRoute = [];   // route điểm rẽ để gửi
-
-// --- HIỂN THỊ VỊ TRÍ HIỆN TẠI LIÊN TỤC VÀ CHÍNH XÁC ---
-function onLocationFound(e) {
-  const latlng = e.latlng;
-
-  if (!currentPositionMarker) {
-    currentPositionMarker = L.marker(latlng, {title: "Vị trí hiện tại"}).addTo(map);
-  } else {
-    currentPositionMarker.setLatLng(latlng);
-  }
-}
-
-function onLocationError(e) {
-  alert("Không thể lấy vị trí hiện tại: " + e.message);
-}
-
-map.locate({watch: true, setView: true, maxZoom: 16, enableHighAccuracy: true});
-map.on('locationfound', onLocationFound);
-map.on('locationerror', onLocationError);
-
-// --- HỖ TRỢ CHUYỂN CHỮ CÓ DẤU SANG KHÔNG DẤU ---
-function removeAccent(str) {
-  return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-}
-
-// --- LẤY TOẠ ĐỘ TỪ TEXT (ĐỊA CHỈ) ---
-async function geocode(q) {
-  const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}`);
-  const js = await res.json();
-  return js.length ? { lat: +js[0].lat, lon: +js[0].lon } : null;
-}
-
-// --- TÍNH ĐƯỜNG BỘ VỚI OSRM ---
-async function computeRoute(lat0, lon0, lat1, lon1) {
-  // Lấy 3 tuyến để chọn lựa nếu có
-  const url = `https://router.project-osrm.org/route/v1/walking/${lon0},${lat0};${lon1},${lat1}?overview=full&geometries=geojson&steps=true&alternatives=true`;
-  const res = await fetch(url);
-  const data = await res.json();
-  return data.routes || [];
-}
-
-// --- TÍNH KHOẢNG CÁCH GIỮA 2 ĐIỂM ---
-function calculateDistance(a, b) {
-  const R = 6371000;
-  const dLat = (b.lat - a.lat) * Math.PI / 180;
-  const dLon = (b.lon - a.lon) * Math.PI / 180;
-  const lat1 = a.lat * Math.PI / 180;
-  const lat2 = b.lat * Math.PI / 180;
-  const ua = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
-  const c = 2 * Math.atan2(Math.sqrt(ua), Math.sqrt(1 - ua));
-  return R * c;
-}
-
-// --- TÌM ĐIỂM RẼ (MANEUVER) ---
-function findManeuvers(steps) {
-  return steps.map(s => ({
-    lat: s.maneuver.location[1],
-    lon: s.maneuver.location[0],
-    modifier: s.maneuver.modifier || 'straight',
-    name: removeAccent(s.name || ''),
-    next: removeAccent(s.destinations || '')
-  }));
-}
-
-// --- LỌC CHỈ GỬI ĐIỂM RẼ (KO GỬI 'straight' ĐỂ GIẢM DỮ LIỆU) ---
-function buildRouteData(leg) {
-  const routePoints = [];
-  const maneuvers = findManeuvers(leg.steps);
-
-  let nextTurnIndex = 0;
-  for (let i = 0; i < leg.steps.length; i++) {
-    const step = leg.steps[i];
-    const man = maneuvers[i];
-    // push điểm rẽ + đoạn thẳng liền sau (cộng khoảng cách)
-    routePoints.push({
-      lat: man.lat,
-      lon: man.lon,
-      action: man.modifier,
-      road: man.name,
-      next: man.next,
-      dist: Math.round(step.distance)
-    });
-  }
-  return routePoints;
-}
-
-// --- VẼ ĐƯỜNG TRÊN BẢN ĐỒ ---
-function drawRouteOnMap(route, color = 'blue') {
+  // Lấy tuyến chọn
+  const route = routesData[idx];
   if (!route) return;
-  const latlngs = route.map(p => [p.lat, p.lon]);
-  const poly = L.polyline(latlngs, { color: color, weight: 5, opacity: 0.7 });
-  poly.addTo(map);
-  routeLines.push(poly);
-}
 
-// --- XÓA ĐƯỜNG CŨ ---
-function clearRoutes() {
-  routeLines.forEach(l => map.removeLayer(l));
-  routeLines = [];
-}
+  // Mỗi route có legs (đường đi giữa các điểm), thường là 1 leg
+  // Lấy tất cả điểm rẽ của legs, gộp lại gửi cho ESP32
+  let routePoints = [];
+  route.legs.forEach(leg => {
+    routePoints = routePoints.concat(buildRouteData(leg));
+  });
 
-// --- XỬ LÝ KHI NGƯỜI CHỌN TUYẾN ĐƯỜNG ---
-function selectRoute(index) {
-  clearRoutes();
-  if (index < 0 || index >= routesData.length) return;
-
-  const route = routesData[index];
-  fullRoute = buildRouteData(route.legs[0]);  // Lấy leg đầu, giả định đi bộ 1 leg
+  fullRoute = routePoints;
   drawRouteOnMap(fullRoute, 'blue');
 
-  // Hiển thị info tuyến trên select option
-  const opt = document.getElementById('routeSelect').options[index];
-  opt.text = `Tuyến ${index + 1}: ${Math.round(route.distance/1000)} km - ${Math.round(route.duration/60)} phút`;
-
-  // Chọn lại option (phòng lỗi)
-  document.getElementById('routeSelect').value = index;
+  // Đổi option trong select
+  document.getElementById('routeSelect').value = idx;
 }
-<script>
-// --- GỬI DỮ LIỆU ĐỊNH DẠNG {"start": {...}, "route": [...] } CHO ESP32 QUA BLE ---
+
+// --- GỬI DỮ LIỆU QUA BLE ---
 async function sendRouteData() {
   if (!writeChar || !fullRoute.length || !currentPositionMarker) {
     alert('Chưa kết nối BLE hoặc chưa có dữ liệu tuyến đường hoặc vị trí hiện tại!');
@@ -554,45 +277,44 @@ async function sendRouteData() {
   const jsonString = JSON.stringify(dataToSend);
   console.log('Dữ liệu gửi:', jsonString);
 
-  // Hiển thị dữ liệu trong textarea
   document.getElementById('sentData').value = jsonString;
 
-  // Mã hóa UTF-8 thành ArrayBuffer
   const encoder = new TextEncoder();
   const encoded = encoder.encode(jsonString);
 
-  // ESP32 thường nhận tối đa ~20 byte mỗi lần qua BLE (MTU ~23)
   const CHUNK_SIZE = 20;
   let offset = 0;
 
-  document.getElementById('progressBar').value = 0;
-  document.getElementById('progressBar').max = encoded.length;
-  document.getElementById('progress').textContent = 'Đang gửi...';
+  const progressBar = document.getElementById('progressBar');
+  const progressText = document.getElementById('progress');
+
+  progressBar.value = 0;
+  progressBar.max = encoded.length;
+  progressText.textContent = 'Đang gửi...';
 
   try {
     while (offset < encoded.length) {
       const chunk = encoded.slice(offset, offset + CHUNK_SIZE);
       await writeChar.writeValue(chunk);
       offset += chunk.length;
-      document.getElementById('progressBar').value = offset;
+      progressBar.value = offset;
     }
-    document.getElementById('progress').textContent = 'Gửi thành công!';
+    progressText.textContent = 'Gửi thành công!';
   } catch (e) {
     console.error('Lỗi gửi dữ liệu:', e);
-    document.getElementById('progress').textContent = 'Lỗi gửi!';
+    progressText.textContent = 'Lỗi gửi!';
   }
 }
 
-// --- SỰ KIỆN NÚT ---
-document.getElementById('btnSendRoute').addEventListener('click', sendRouteData);
-
-// --- XỬ LÝ CHỌN TUYẾN TRÊN SELECT ---
-document.getElementById('routeSelect').addEventListener('change', e => {
-  const idx = Number(e.target.value);
-  selectRoute(idx);
+// --- COPY DỮ LIỆU ĐÃ GỬI ---
+document.getElementById('copyBtn').addEventListener('click', () => {
+  const sentData = document.getElementById('sentData');
+  sentData.select();
+  document.execCommand('copy');
+  alert('Đã copy dữ liệu!');
 });
 
-// --- TÍNH ĐƯỜNG VỚI ĐỊA CHỈ NHẬP ---
+// --- NÚT TÍNH ĐƯỜNG ---
 document.getElementById('btnRoute').addEventListener('click', async () => {
   const destText = document.getElementById('destInput').value.trim();
   if (!destText) {
@@ -621,87 +343,99 @@ document.getElementById('btnRoute').addEventListener('click', async () => {
 
   routesData = computedRoutes;
 
-  // Xóa tuyến cũ, vẽ tuyến đầu tiên mặc định
   clearRoutes();
-  // Tạo option cho từng tuyến
+
   const select = document.getElementById('routeSelect');
   select.innerHTML = '';
   routesData.forEach((r, i) => {
     const option = document.createElement('option');
     option.value = i;
-    option.text = `Tuyến ${i + 1}: ${Math.round(r.distance/1000)} km - ${Math.round(r.duration/60)} phút`;
+    option.text = `Tuyến ${i + 1}: ${Math.round(r.distance / 1000)} km - ${Math.round(r.duration / 60)} phút`;
     select.appendChild(option);
   });
 
-  // Hiển thị tuyến đầu tiên luôn
   selectRoute(0);
 });
 
-// --- BLE Quét và Kết nối ---
-async function scanDevices() {
+// --- CHỌN TUYẾN ĐƯỜNG ---
+document.getElementById('routeSelect').addEventListener('change', e => {
+  const idx = Number(e.target.value);
+  selectRoute(idx);
+});
+
+// --- BLE: Quét ---
+async function scanBLE() {
   try {
     const device = await navigator.bluetooth.requestDevice({
-      filters: [{services: [SERVICE_UUID]}],
+      filters: [{ services: [SERVICE_UUID] }],
       optionalServices: [SERVICE_UUID]
     });
     knownDevices[device.id] = device;
     updateDeviceList();
   } catch (e) {
-    alert('Quét thiết bị thất bại: ' + e);
+    alert('Lỗi khi quét thiết bị BLE: ' + e.message);
   }
 }
 
+// --- CẬP NHẬT DANH SÁCH THIẾT BỊ ---
 function updateDeviceList() {
   const select = document.getElementById('deviceList');
   select.innerHTML = '';
-  Object.values(knownDevices).forEach(device => {
+  for (const id in knownDevices) {
+    const dev = knownDevices[id];
     const option = document.createElement('option');
-    option.value = device.id;
-    option.text = device.name || device.id;
+    option.value = id;
+    option.text = dev.name || dev.id;
     select.appendChild(option);
-  });
+  }
 }
 
-async function connectDevice() {
+// --- KẾT NỐI BLE ---
+async function connectBLE() {
   const select = document.getElementById('deviceList');
   const deviceId = select.value;
-  if (!deviceId || !knownDevices[deviceId]) {
-    alert('Chưa chọn thiết bị!');
+  if (!deviceId) {
+    alert('Vui lòng chọn thiết bị để kết nối');
     return;
   }
+
+  const device = knownDevices[deviceId];
+  if (!device) {
+    alert('Thiết bị không tồn tại');
+    return;
+  }
+
   try {
-    connectedDevice = knownDevices[deviceId];
-    gattServer = await connectedDevice.gatt.connect();
+    gattServer = await device.gatt.connect();
     const service = await gattServer.getPrimaryService(SERVICE_UUID);
     writeChar = await service.getCharacteristic(CHAR_UUID);
-    alert('Kết nối thành công với ' + connectedDevice.name);
+    connectedDevice = device;
+    alert(`Đã kết nối với ${device.name || device.id}`);
   } catch (e) {
-    alert('Kết nối thất bại: ' + e);
+    alert('Lỗi kết nối BLE: ' + e.message);
   }
 }
 
-async function disconnectDevice() {
-  if (connectedDevice && connectedDevice.gatt.connected) {
-    await connectedDevice.gatt.disconnect();
-    alert('Đã ngắt kết nối');
+// --- NGẮT KẾT NỐI BLE ---
+function disconnectBLE() {
+  if (gattServer && gattServer.connected) {
+    gattServer.disconnect();
+    alert('Đã ngắt kết nối BLE');
   }
   connectedDevice = null;
-  gattServer = null;
   writeChar = null;
+  gattServer = null;
 }
 
-document.getElementById('btnScan').addEventListener('click', scanDevices);
-document.getElementById('btnConnect').addEventListener('click', connectDevice);
-document.getElementById('btnDisconnect').addEventListener('click', disconnectDevice);
+// --- NÚT GỬI DỮ LIỆU TUYẾN ---
+document.getElementById('btnSendRoute').addEventListener('click', sendRouteData);
 
-// --- COPY DỮ LIỆU ĐÃ GỬI ---
-document.getElementById('copyBtn').addEventListener('click', () => {
-  const data = document.getElementById('sentData');
-  data.select();
-  document.execCommand('copy');
-  alert('Đã copy dữ liệu gửi xuống ESP32!');
-});
+// --- NÚT QUÉT, KẾT NỐI, NGẮT ---
+document.getElementById('btnScan').addEventListener('click', scanBLE);
+document.getElementById('btnConnect').addEventListener('click', connectBLE);
+document.getElementById('btnDisconnect').addEventListener('click', disconnectBLE);
+
 </script>
-
-//
+</body>
+</html>
 
