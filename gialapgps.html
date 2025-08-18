@@ -14,13 +14,8 @@
       height: 100vh;
     }
 
-    #log {
-      display: none; /* Ẩn log nếu không cần */
-    }
-
     #map {
       flex: 1;
-      height: 100%;
     }
 
     #controls {
@@ -34,7 +29,7 @@
       justify-content: space-between;
     }
 
-    input[type="text"] {
+    input[type="text"], select {
       padding: 6px;
       width: 260px;
     }
@@ -92,6 +87,13 @@
 
 <div id="controls">
   <div>
+    <strong>Chọn tuyến:</strong>
+    <select id="routeSelect" disabled>
+      <option>-- Chưa tính --</option>
+    </select>
+  </div>
+
+  <div>
     <strong>Điểm đến:</strong>
     <input id="destInput" type="text" placeholder="Nhập địa chỉ (VD: Bến Thành)" />
     <button id="btnRoute">Tính đường</button>
@@ -121,7 +123,6 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '© OpenStreetMap contributors'
 }).addTo(map);
 
-// ✅ Định vị liên tục + chính xác
 let currentPosition = null;
 let userMarker = null;
 
@@ -129,9 +130,7 @@ navigator.geolocation.watchPosition(
   (pos) => {
     const lat = pos.coords.latitude;
     const lon = pos.coords.longitude;
-
     currentPosition = { lat, lon };
-
     if (!userMarker) {
       userMarker = L.marker([lat, lon], {
         title: "Vị trí hiện tại",
@@ -141,78 +140,22 @@ navigator.geolocation.watchPosition(
           iconAnchor: [12, 12]
         })
       }).addTo(map);
-      map.setView([lat, lon], 17); // Zoom đến vị trí đầu
+      map.setView([lat, lon], 17);
     } else {
       userMarker.setLatLng([lat, lon]);
     }
-
-    // 👉 Nếu muốn bản đồ luôn theo dõi bạn: bỏ dấu //
-    // map.panTo([lat, lon], { animate: true });
   },
   (err) => {
-    console.error("Không thể lấy vị trí:", err);
-    alert("⚠️ Không thể lấy vị trí. Hãy bật GPS và cấp quyền định vị cho trình duyệt.");
+    alert("⚠️ Không thể lấy vị trí. Hãy bật GPS và cấp quyền định vị.");
+    console.error(err);
   },
-  {
-    enableHighAccuracy: true,
-    maximumAge: 0,
-    timeout: 10000
-  }
+  { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
 );
 
 let routeLine = null;
 let knownDevices = {}, connectedDevice = null, gattServer = null, writeChar = null;
 let fullRoute = [], fullManeuvers = [];
-
-function log(...args) {
-  console.log(...args);
-}
-
-// ... (giữ nguyên toàn bộ các phần còn lại như `btnScan`, `btnConnect`, `btnRoute`, `btnSendRoute`, v.v.) ...
-
-
-document.getElementById('btnScan').addEventListener('click', async () => {
-  try {
-    const device = await navigator.bluetooth.requestDevice({
-      filters: [{ name: 'ESP32-NAV' }],
-      optionalServices: [SERVICE_UUID]
-    });
-
-    knownDevices[device.id] = device;
-
-    const listEl = document.getElementById('deviceList');
-    listEl.innerHTML = '';
-    const opt = new Option(device.name || `Device ${device.id.slice(0, 6)}`, device.id);
-    listEl.appendChild(opt);
-    listEl.value = device.id;
-
-    log('Tìm thấy ESP32-NAV:', device.name || device.id);
-  } catch (err) {
-    log('Không tìm thấy thiết bị:', err);
-  }
-});
-
-document.getElementById('btnConnect').addEventListener('click', async () => {
-  const id = document.getElementById('deviceList').value;
-  const device = knownDevices[id];
-  if (!device) return alert('Chưa chọn thiết bị');
-  try {
-    gattServer = await device.gatt.connect();
-    const service = await gattServer.getPrimaryService(SERVICE_UUID);
-    writeChar = await service.getCharacteristic(CHAR_UUID);
-    connectedDevice = device;
-    log('Đã kết nối BLE');
-  } catch (err) {
-    log('Lỗi kết nối:', err);
-  }
-});
-
-document.getElementById('btnDisconnect').addEventListener('click', () => {
-  if (connectedDevice && connectedDevice.gatt.connected) {
-    connectedDevice.gatt.disconnect();
-    log('Đã ngắt kết nối');
-  }
-});
+let allRoutes = [], selectedRouteIndex = 0;
 
 function removeAccent(str) {
   return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
@@ -224,11 +167,29 @@ async function geocode(q) {
   return js.length ? { lat: +js[0].lat, lon: +js[0].lon } : null;
 }
 
-async function computeRoute(lat0, lon0, lat1, lon1) {
-  const url = `https://router.project-osrm.org/route/v1/walking/${lon0},${lat0};${lon1},${lat1}?overview=full&geometries=geojson&steps=true`;
+async function computeRoutes(lat0, lon0, lat1, lon1) {
+  const url = `https://router.project-osrm.org/route/v1/walking/${lon0},${lat0};${lon1},${lat1}?overview=full&geometries=geojson&steps=true&alternatives=true`;
   const res = await fetch(url);
   const data = await res.json();
-  return data.routes[0];
+  return data.routes;
+}
+
+function applyRoute(index) {
+  const route = allRoutes[index];
+  if (!route) return;
+
+  fullRoute = route.geometry.coordinates.map(c => ({ lat: c[1], lon: c[0] }));
+  fullManeuvers = (route.legs[0]?.steps || []).map(s => ({
+    lat: s.maneuver.location[1],
+    lon: s.maneuver.location[0],
+    modifier: s.maneuver.modifier || 'straight',
+    name: removeAccent(s.name || ''),
+    next: removeAccent(s.destinations || '')
+  }));
+
+  if (routeLine) map.removeLayer(routeLine);
+  routeLine = L.polyline(fullRoute.map(p => [p.lat, p.lon]), { color: 'blue' }).addTo(map);
+  map.fitBounds(routeLine.getBounds());
 }
 
 function calculateDistance(a, b) {
@@ -242,19 +203,19 @@ function calculateDistance(a, b) {
   return R * c;
 }
 
+function matchManeuverAt(index) {
+  const p = fullRoute[index];
+  return fullManeuvers.find(m =>
+    Math.abs(m.lat - p.lat) < 1e-5 && Math.abs(m.lon - p.lon) < 1e-5
+  );
+}
+
 function findNextManeuverIndex(fromIndex = 0) {
   for (let i = fromIndex; i < fullRoute.length; i++) {
     const match = matchManeuverAt(i);
     if (match && match.modifier !== 'straight') return i;
   }
   return -1;
-}
-
-function matchManeuverAt(index) {
-  const p = fullRoute[index];
-  return fullManeuvers.find(m =>
-    Math.abs(m.lat - p.lat) < 1e-5 && Math.abs(m.lon - p.lon) < 1e-5
-  );
 }
 
 document.getElementById('btnRoute').addEventListener('click', async () => {
@@ -273,22 +234,67 @@ document.getElementById('btnRoute').addEventListener('click', async () => {
   const dest = await geocode(destText);
   if (!dest) return alert('Không tìm thấy địa chỉ này');
 
-  const route = await computeRoute(latitude, longitude, dest.lat, dest.lon);
-  if (!route) return alert('Không tính được lộ trình');
+  const routes = await computeRoutes(latitude, longitude, dest.lat, dest.lon);
+  if (!routes || routes.length === 0) return alert('Không tính được lộ trình');
 
-  fullRoute = route.geometry.coordinates.map(c => ({ lat: c[1], lon: c[0] }));
-  fullManeuvers = (route.legs[0]?.steps || []).map(s => ({
-    lat: s.maneuver.location[1],
-    lon: s.maneuver.location[0],
-    modifier: s.maneuver.modifier || 'straight',
-    name: removeAccent(s.name || ''),
-    next: removeAccent(s.destinations || '')
-  }));
+  allRoutes = routes;
+  selectedRouteIndex = 0;
 
-  if (routeLine) map.removeLayer(routeLine);
-  routeLine = L.polyline(fullRoute.map(p => [p.lat, p.lon]), { color: 'blue' }).addTo(map);
-  map.fitBounds(routeLine.getBounds());
-  log('Tính đường xong:', fullRoute.length, 'tọa độ -', fullManeuvers.length, 'maneuver');
+  const select = document.getElementById('routeSelect');
+  select.disabled = false;
+  select.innerHTML = '';
+
+  routes.forEach((r, i) => {
+    const dist = Math.round(r.distance);
+    const time = Math.round(r.duration / 60);
+    const opt = new Option(`Tuyến ${i + 1} - ${dist}m, ${time} phút`, i);
+    select.appendChild(opt);
+  });
+
+  applyRoute(selectedRouteIndex);
+});
+
+document.getElementById('routeSelect').addEventListener('change', (e) => {
+  selectedRouteIndex = parseInt(e.target.value);
+  applyRoute(selectedRouteIndex);
+});
+
+document.getElementById('btnScan').addEventListener('click', async () => {
+  try {
+    const device = await navigator.bluetooth.requestDevice({
+      filters: [{ name: 'ESP32-NAV' }],
+      optionalServices: [SERVICE_UUID]
+    });
+
+    knownDevices[device.id] = device;
+    const listEl = document.getElementById('deviceList');
+    listEl.innerHTML = '';
+    const opt = new Option(device.name || `Device ${device.id.slice(0, 6)}`, device.id);
+    listEl.appendChild(opt);
+    listEl.value = device.id;
+  } catch (err) {
+    console.error(err);
+  }
+});
+
+document.getElementById('btnConnect').addEventListener('click', async () => {
+  const id = document.getElementById('deviceList').value;
+  const device = knownDevices[id];
+  if (!device) return alert('Chưa chọn thiết bị');
+  try {
+    gattServer = await device.gatt.connect();
+    const service = await gattServer.getPrimaryService(SERVICE_UUID);
+    writeChar = await service.getCharacteristic(CHAR_UUID);
+    connectedDevice = device;
+  } catch (err) {
+    console.error(err);
+  }
+});
+
+document.getElementById('btnDisconnect').addEventListener('click', () => {
+  if (connectedDevice && connectedDevice.gatt.connected) {
+    connectedDevice.gatt.disconnect();
+  }
 });
 
 document.getElementById('btnSendRoute').addEventListener('click', async () => {
@@ -345,10 +351,8 @@ document.getElementById('btnSendRoute').addEventListener('click', async () => {
   document.getElementById('sentData').value = jsonStr;
   document.getElementById('progress').innerText = "✅ Đã gửi xong";
   document.getElementById('progressBar').value = 100;
-  log("Đã gửi toàn bộ route + vị trí");
 });
 
-// Copy data
 document.getElementById('copyBtn').addEventListener('click', async () => {
   const txt = document.getElementById('sentData').value;
   await navigator.clipboard.writeText(txt);
