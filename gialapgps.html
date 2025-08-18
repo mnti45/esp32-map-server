@@ -168,7 +168,7 @@ function onLocationError(e) {
   alert("Không thể lấy vị trí hiện tại: " + e.message);
 }
 
-map.locate({watch: true,  enableHighAccuracy: true});
+map.locate({watch: true, enableHighAccuracy: true, setView: false});
 map.on('locationfound', onLocationFound);
 map.on('locationerror', onLocationError);
 
@@ -225,12 +225,14 @@ function buildRouteData(leg) {
 }
 
 // --- VẼ ĐƯỜNG TRÊN BẢN ĐỒ ---
-function drawRouteOnMap(route, color = 'blue') {
-  if (!route) return;
-  const latlngs = route.map(p => [p.lat, p.lon]);
+function drawRouteOnMapFromOSRM(route, color = 'blue') {
+  if (!route || !route.geometry || !route.geometry.coordinates) return;
+
+  const latlngs = route.geometry.coordinates.map(coord => [coord[1], coord[0]]);
   const poly = L.polyline(latlngs, { color: color, weight: 5, opacity: 0.7 });
   poly.addTo(map);
   routeLines.push(poly);
+  return poly;
 }
 
 // --- XÓA ĐƯỜNG CŨ ---
@@ -244,23 +246,24 @@ function selectRoute(idx) {
   if (idx < 0 || idx >= routesData.length) return;
   clearRoutes();
 
-  // Lấy tuyến chọn
   const route = routesData[idx];
   if (!route) return;
 
-  // Mỗi route có legs (đường đi giữa các điểm), thường là 1 leg
-  // Lấy tất cả điểm rẽ của legs, gộp lại gửi cho ESP32
+  // Gộp điểm maneuver để gửi cho ESP32
   let routePoints = [];
   route.legs.forEach(leg => {
     routePoints = routePoints.concat(buildRouteData(leg));
   });
 
   fullRoute = routePoints;
-  drawRouteOnMap(fullRoute, 'blue');
 
-  // Đổi option trong select
+  // Vẽ bằng geometry gốc của OSRM
+  const poly = drawRouteOnMapFromOSRM(route, 'blue');
+  map.fitBounds(poly.getBounds());
+
   document.getElementById('routeSelect').value = idx;
 }
+
 
 // --- GỬI DỮ LIỆU QUA BLE ---
 async function sendRouteData() {
@@ -438,6 +441,7 @@ document.getElementById('btnDisconnect').addEventListener('click', disconnectBLE
 </script>
 </body>
 </html>
+
 
 
 
