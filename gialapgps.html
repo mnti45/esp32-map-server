@@ -197,7 +197,14 @@ function selectRoute(index) {
   map.fitBounds(routeLayer.getBounds());
 
   // Lưu dữ liệu route để gửi BLE (chuyển geojson coords sang [{lat, lon}])
-  fullRoute = route.geometry.coordinates.map(coord => ({ lat: coord[1], lon: coord[0] }));
+  fullRoute = route.geometry.coordinates.map(coord => ({
+  lat: coord[1],
+  lon: coord[0],
+  action: "none",
+  road: "Unknown",
+  next: ""
+}));
+
 }
 
 // --- Hàm gọi API định tuyến OSRM ---
@@ -320,7 +327,15 @@ async function sendRouteData() {
     lat: currentPositionMarker.getLatLng().lat,
     lon: currentPositionMarker.getLatLng().lng
   };
-  const jsonString = JSON.stringify(fullRoute);
+  const payload = {
+  start: {
+    lat: currentPositionMarker.getLatLng().lat,
+    lon: currentPositionMarker.getLatLng().lng
+  },
+  route: fullRoute
+};
+const jsonString = JSON.stringify(payload);
+
   console.log('Dữ liệu gửi:', jsonString);
 
   document.getElementById('sentData').value = jsonString;
@@ -438,4 +453,5 @@ window.onload = initMap;
 </script>
 </body>
 </html>
+
 
